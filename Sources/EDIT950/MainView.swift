@@ -214,6 +214,22 @@ struct MainView: View {
             .disabled(model.session == nil || model.isBusy)
             .help("Show parsed disk information and diagnostics")
 
+            Button(action: model.backupImage) {
+                Label("Backup", systemImage: "externaldrive.badge.timemachine")
+            }
+            .disabled(model.session == nil || model.isBusy)
+            .help("Create a verified timestamped backup of the open image")
+
+            Button(action: model.cleanEject) {
+                Label("Clean Eject", systemImage: "eject")
+            }
+            .disabled(
+                model.session?.isRemovable != true
+                    || settings.usbCleanURL == nil
+                    || model.isBusy
+            )
+            .help("Clean and safely eject the mounted removable volume")
+
             Button {
                 model.showTagManager = true
             } label: {

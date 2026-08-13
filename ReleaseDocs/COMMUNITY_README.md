@@ -133,7 +133,7 @@ Install it as `/Applications/USBclean.app`, or choose a different location in ED
 1. Back up valuable IMG files before enabling write access.
 2. Open an IMG or ISO using the Open button, Finder, or drag and drop.
 3. Select files in the table.
-4. Use Import, Export, Delete, Disk Info or Backup from the toolbar.
+4. Use Import, Export, Delete, Disk Info, Clean Eject or Backup from the toolbar.
 
 Click Name, Type or Size to sort the IMG table. Sorting does not change the underlying AKAI file indexes used for editing, copying or deletion.
 
