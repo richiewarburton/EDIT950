@@ -371,4 +371,4 @@ AKAI is a trademark of its respective owner. EDIT950 is an independent community
 
 ## Known distribution limitation
 
-This build is ad-hoc signed and is not notarized. A future public release should ideally be signed with an Apple Developer ID certificate and notarized so community users receive the normal verified-developer launch experience.
+This EDIT950 build is ad-hoc signed and is not notarized. A future Developer ID/notarized EDIT950 distribution would provide the normal verified-developer launch experience.
