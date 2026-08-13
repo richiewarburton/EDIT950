@@ -166,6 +166,12 @@ workflow:
 
 > **Find in FIND950, modify in EDIT950, play and recall in PLAY950.**
 
+Public Universal macOS companion builds are available now: download
+[FIND950](https://github.com/richiewarburton/FIND950/releases/latest) and
+[PLAY950](https://github.com/richiewarburton/PLAY950/releases/latest) from their
+GitHub release pages. Both community builds are ad-hoc signed rather than
+Apple-notarized.
+
 You can use EDIT950 by itself. FIND950 becomes useful when the archive is
 too large to explore image by image. PLAY950 is optional and is for musicians
 who want the recovered programs available as a DAW instrument.
