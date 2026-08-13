@@ -9,13 +9,13 @@
 [![macOS Swift CI](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-ff2a1a.svg)](LICENSE)
 
-## Open the S900/S950 disks you thought were stranded in the past
+## Open and edit the S900/S950 stuff you thought was stranded in the past
 
 If your old sampler floppies now exist as `.img` files, EDIT950 makes
 them useful on a modern Mac. Open an image and see the original volumes, P9
-programs and S9 samples. Audition samples, export WAVs, inspect the program that
-made a sound work, edit native parameters, or build a clean working image for a
-Gotek, another archive or a DAW workflow.
+programs and S9 samples. Audition samples, import/export WAVs, inspect the program 
+that made a sound work, edit native parameters, or build a clean working image for a
+Gotek, another archive or a DAW workflow (PLAY950, perhaps).
 
 This is for people who:
 
@@ -24,9 +24,11 @@ This is for people who:
 - inherited an S900/S950 library but no longer own the sampler;
 - want the original programs and keygroups, not just disconnected WAV files; or
 - still use the hardware and need a safer way to prepare IMG files.
+- still use the hardware but the buttons are a bit dodgy so you need to do all your work in a laptop
+  
 
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
-formats or writes a physical drive.
+formats or writes a physical drive. If you want to pretend you have one, use PLAY950.  It's a banger.
 
 Current source version: **1.8.22 (build 40)**. Requires macOS 14 or later.
 
