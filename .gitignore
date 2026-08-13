@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+.swiftpm/
+Build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Private, locally owned validation material.
+/test-media/private/
+/local-history/

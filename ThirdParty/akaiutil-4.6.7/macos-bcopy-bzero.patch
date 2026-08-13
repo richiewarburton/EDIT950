@@ -1,0 +1,10 @@
+--- a/commoninclude.h
++++ b/commoninclude.h
+@@
+-extern void bcopy(const void *src,void *dst,size_t len);
+-extern void bzero(void *b,size_t len);
++/* Modern Apple SDKs define fortified bcopy/bzero function-like macros. */
++#undef bcopy
++#undef bzero
++extern void bcopy(const void *src, void *dst, size_t len);
++extern void bzero(void *b, size_t len);

@@ -1,0 +1,136 @@
+EDIT950 — THIRD-PARTY TOOLS AND SOURCES
+=========================================
+
+AKAI Util is bundled as a clearly separate executable and launched as a
+subprocess; it is not linked into EDIT950. Its complete corresponding
+source accompanies the distributed application. The application otherwise uses
+Apple system frameworks and launches separately installed optional tools only
+when their features are requested. One sanitized, audio-free Ableton
+Live user-preset template is included as application data for Drum Rack export;
+see section 4.
+
+
+1. AKAI Util
+------------
+
+Purpose:
+  Required command-line engine for reading and writing S950 disk images,
+  S9 samples and P9 programs.
+
+Tested version:
+  AKAI Util 4.6.7 Darwin, released 21 October 2022.
+
+Copyright shown by the upstream distribution:
+  Copyright (c) 2008-2022 Klaus Michael Indlekofer.
+  All rights reserved.
+
+Official project and downloads:
+  https://sourceforge.net/projects/akaiutil/
+  https://sourceforge.net/projects/akaiutil/files/
+
+Exact corresponding source archive:
+  https://sourceforge.net/projects/akaiutil/files/akaiutil-4.6.7.tar.gz/download
+
+Source archive SHA-256:
+  b9b72f7af0a40ec8021bfe23c16bd2c1f17dc80308be5e1249d4d7dac94fdb49
+
+Community GitHub fork:
+  https://github.com/Midi-In/akaiutil
+
+Terms:
+  AKAI Util is licensed under GNU GPL version 2 or later. The release includes
+  the exact modified source used for the helper, gpl-2.0.txt, upstream README,
+  provenance, build instructions and the compatibility patch. Review all
+  upstream licensing, disclaimer and incorporated-code notices before public
+  distribution. EDIT950 communicates with this separate executable
+  only through standard input/output; licensing of that separation should be
+  reviewed by a qualified human before release.
+
+Architecture and local change:
+  The bundled helper is compiled from source as a Universal x86_64/arm64 Mach-O.
+  The only source change undefines the modern Apple SDK fortified bcopy/bzero
+  macros before AKAI Util's existing declarations. Rosetta is not required.
+
+
+2. USBclean
+-----------
+
+Purpose:
+  Optional application used only by EDIT950's Clean Eject action.
+
+Developer:
+  SweetP Productions, Inc.
+
+Official product page:
+  https://usbclean.sweetpproductions.com/
+
+Official developer site:
+  https://sweetpproductions.com/
+
+Mac App Store:
+  https://apps.apple.com/gb/app/usbclean/id907406031?mt=12
+
+Support:
+  https://support.sweetpproductions.com/category/20/usbclean
+
+Terms:
+  USBclean is proprietary commercial software. Its source code is not published
+  as part of EDIT950, and USBclean is not included in this ZIP.
+  Obtain and license it directly from SweetP Productions or the Mac App Store.
+
+
+3. User-selected audio editor
+-----------------------------
+
+Purpose:
+  Optional application used only by the direct S950 sample-editing
+  workflow. It must be able to open and save PCM WAV files.
+
+Terms:
+  No audio editor is included or required for the rest of EDIT950.
+  Users choose and license their preferred editor independently. AKAI Image
+  Manager does not link to, redistribute, or depend on a particular editor.
+
+
+4. Ableton Live user-preset template
+------------------------------------
+
+Purpose:
+  Used as the structural basis for S950-to-Ableton Drum Rack export. The app
+  creates one Ableton Sampler device per exported S950 keygroup.
+
+Provenance:
+  Created by the project author in Ableton Live 12.4.3, then sanitized for this
+  application. Personal paths, usernames, audio samples, browser identifiers
+  and source-preset names were removed. The bundled ADG contains device state
+  only and is not the Ableton application or a sound library.
+
+Requirement and terms:
+  Ableton Live is proprietary software and is not included. Users must obtain
+  and license it from Ableton to open the generated ADG files. Ableton is not
+  needed for EDIT950's other features.
+
+Official product site:
+  https://www.ableton.com/live/
+
+
+5. Apple system components
+--------------------------
+
+EDIT950 uses SwiftUI, AppKit, AVFoundation, UniformTypeIdentifiers
+and CryptoKit supplied with macOS. EDIT950 and its AKAI Util helper
+run natively on Apple silicon and Intel Macs; Rosetta is not required.
+
+Gatekeeper and unnotarized-app guidance:
+  https://support.apple.com/102445
+
+
+Trademarks
+----------
+
+AKAI and related product names are trademarks of their respective owners.
+Ableton and Live are trademarks of Ableton AG.
+USBclean is a product of SweetP Productions, Inc.
+EDIT950 is independent and is not affiliated with or endorsed by
+Akai Professional, Ableton AG, Klaus Michael Indlekofer, Midi-In, or SweetP
+Productions.
