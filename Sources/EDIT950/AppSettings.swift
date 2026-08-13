@@ -4,12 +4,19 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AppSettings: ObservableObject {
+    static let fullDiskAccessSettingsURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+    )!
+
+    static func openFullDiskAccessSettings() {
+        NSWorkspace.shared.open(fullDiskAccessSettingsURL)
+    }
+
     static let executableDefault: String = {
         let resources = Bundle.main.resourceURL
             ?? Bundle.main.bundleURL.appendingPathComponent("Contents/Resources", isDirectory: true)
         return resources.appendingPathComponent("akaiutil", isDirectory: false).path
     }()
-    static let usbCleanDefault = "/Applications/USBclean.app"
     nonisolated static var applicationBundleContentType: UTType {
         .applicationBundle
     }
@@ -22,9 +29,11 @@ final class AppSettings: ObservableObject {
     @Published var backupFolderPath: String { didSet { save() } }
     @Published var openExportDestination: Bool { didSet { save() } }
     @Published var audioEditorPath: String { didSet { save() } }
-    @Published var usbCleanPath: String { didSet { save() } }
     @Published var autoOpenLogOnError: Bool { didSet { save() } }
     @Published var ejectAfterUSBCopy: Bool { didSet { save() } }
+    @Published var mediaCleanupPolicy: RemovableMediaCleanupPolicy {
+        didSet { save() }
+    }
     @Published var detectedVersion = "Not checked"
 
     private let defaults: UserDefaults
@@ -42,9 +51,17 @@ final class AppSettings: ObservableObject {
         backupFolderPath = defaults.string(forKey: "backupFolderPath") ?? ""
         openExportDestination = defaults.object(forKey: "openExportDestination") as? Bool ?? false
         audioEditorPath = defaults.string(forKey: "audioEditorPath") ?? ""
-        usbCleanPath = defaults.string(forKey: "usbCleanPath") ?? Self.usbCleanDefault
         autoOpenLogOnError = defaults.object(forKey: "autoOpenLogOnError") as? Bool ?? true
         ejectAfterUSBCopy = defaults.object(forKey: "ejectAfterUSBCopy") as? Bool ?? false
+        if let data = defaults.data(forKey: "removableMediaCleanupPolicy"),
+           let policy = try? JSONDecoder().decode(
+               RemovableMediaCleanupPolicy.self,
+               from: data
+           ) {
+            mediaCleanupPolicy = policy
+        } else {
+            mediaCleanupPolicy = RemovableMediaCleanupPolicy()
+        }
     }
 
     var defaultImportOptions: ImportOptions {
@@ -63,8 +80,6 @@ final class AppSettings: ObservableObject {
         let url = URL(fileURLWithPath: audioEditorPath)
         return Self.isRunnableApplication(at: url) ? url : nil
     }
-    var usbCleanURL: URL? { ImageFileOperations.exactUSBcleanURL(preferredPath: usbCleanPath) }
-
     func validateExecutable() async {
         let path = executablePath
         guard FileManager.default.isExecutableFile(atPath: path) else {
@@ -94,17 +109,6 @@ final class AppSettings: ObservableObject {
                 return error.localizedDescription
             }
         }.value
-    }
-
-    func chooseUSBclean() {
-        let panel = NSOpenPanel()
-        panel.title = "Choose USBclean"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.treatsFilePackagesAsDirectories = false
-        panel.allowedContentTypes = [Self.applicationBundleContentType]
-        if panel.runModal() == .OK, let url = panel.url { usbCleanPath = url.path }
     }
 
     func chooseAudioEditor() {
@@ -179,9 +183,9 @@ final class AppSettings: ObservableObject {
         clearBackupFolder()
         openExportDestination = false
         audioEditorPath = ""
-        usbCleanPath = Self.usbCleanDefault
         autoOpenLogOnError = true
         ejectAfterUSBCopy = false
+        mediaCleanupPolicy = RemovableMediaCleanupPolicy()
         defaults.removeObject(forKey: "lastExportBookmark")
         Task { await validateExecutable() }
     }
@@ -250,8 +254,44 @@ final class AppSettings: ObservableObject {
         defaults.set(backupFolderPath, forKey: "backupFolderPath")
         defaults.set(openExportDestination, forKey: "openExportDestination")
         defaults.set(audioEditorPath, forKey: "audioEditorPath")
-        defaults.set(usbCleanPath, forKey: "usbCleanPath")
         defaults.set(autoOpenLogOnError, forKey: "autoOpenLogOnError")
         defaults.set(ejectAfterUSBCopy, forKey: "ejectAfterUSBCopy")
+        if let data = try? JSONEncoder().encode(mediaCleanupPolicy) {
+            defaults.set(data, forKey: "removableMediaCleanupPolicy")
+        }
+    }
+
+    func setDefaultCleanupName(_ name: String, enabled: Bool) {
+        var policy = mediaCleanupPolicy
+        policy.setDefault(name, enabled: enabled)
+        mediaCleanupPolicy = policy
+    }
+
+    func addCustomCleanupName(_ name: String) throws {
+        var policy = mediaCleanupPolicy
+        try policy.addCustomName(name)
+        mediaCleanupPolicy = policy
+    }
+
+    func removeCustomCleanupName(_ name: String) {
+        var policy = mediaCleanupPolicy
+        policy.customNames.removeAll {
+            $0.caseInsensitiveCompare(name) == .orderedSame
+        }
+        mediaCleanupPolicy = policy
+    }
+
+    func addCleanupException(_ exception: String) throws {
+        var policy = mediaCleanupPolicy
+        try policy.addException(exception)
+        mediaCleanupPolicy = policy
+    }
+
+    func removeCleanupException(_ exception: String) {
+        var policy = mediaCleanupPolicy
+        policy.exceptions.removeAll {
+            $0.caseInsensitiveCompare(exception) == .orderedSame
+        }
+        mediaCleanupPolicy = policy
     }
 }

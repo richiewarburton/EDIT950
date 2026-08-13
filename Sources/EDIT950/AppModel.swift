@@ -345,10 +345,9 @@ final class AppModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try tagLibrary.export(to: url)
-            report = OperationReport(
+            publishSuccess(
                 title: "Shared Tag Index Exported",
-                lines: ["Saved a portable copy at:", url.path],
-                isError: false
+                lines: ["Saved a portable copy at:", url.path]
             )
         } catch {
             reportError(error)
@@ -4891,25 +4890,162 @@ final class AppModel: ObservableObject {
     }
 
     func performCleanEject() async throws {
-        guard let session, let volume = session.removableVolumeURL else { throw AppError.usbVolumeNotFound }
-        guard let usbClean = settings.usbCleanURL else { throw AppError.usbCleanNotFound }
-        progress = OperationProgress(kind: .ejecting, current: 0, total: 2, detail: volume.lastPathComponent)
+        guard let session, let volume = session.removableVolumeURL else {
+            throw AppError.usbVolumeNotFound
+        }
+        guard let cleanupPlan = try await prepareCleanupPlan(for: volume) else {
+            return
+        }
+        progress = OperationProgress(
+            kind: .ejecting,
+            current: 0,
+            total: 3,
+            detail: volume.lastPathComponent
+        )
         await controller.close()
         self.session = nil
         snapshot = DiskSnapshot()
         selection.removeAll()
-        updateProgress(1, detail: "Handing volume to USBclean")
-        try await ImageFileOperations.handToUSBclean(volume: volume, application: usbClean)
-        updateProgress(1, detail: "Waiting for \(volume.lastPathComponent) to unmount")
+        updateProgress(1, detail: "Cleaning configured metadata")
+        let cleanupResult = try await performCleanup(
+            cleanupPlan,
+            on: volume
+        )
+        updateProgress(2, detail: "Asking macOS to safely eject \(volume.lastPathComponent)")
+        try await ImageFileOperations.safelyEject(volume: volume)
         try await ImageFileOperations.waitUntilUnmounted(volume: volume)
-        updateProgress(2, detail: "Safe to unplug")
+        updateProgress(3, detail: "Safe to unplug")
         report = nil
         headerNotice = HeaderNotice(
             title: "\(volume.lastPathComponent) safely ejected",
-            detail: "The volume is no longer mounted and is safe to unplug.",
+            detail: successfulEjectDetail(for: cleanupResult),
             systemImage: "eject.circle.fill"
         )
         progress = nil
+    }
+
+    private enum CleanupEjectDecision {
+        case cleanAndEject
+        case cancel
+    }
+
+    private struct CleanupEjectPlan {
+        let candidates: [RemovableMediaCleanupCandidate]
+        let policy: RemovableMediaCleanupPolicy
+    }
+
+    private func prepareCleanupPlan(
+        for volume: URL
+    ) async throws -> CleanupEjectPlan? {
+        let policy = settings.mediaCleanupPolicy
+        let candidates = try await Task.detached(priority: .userInitiated) {
+            try RemovableMediaCleaner.candidates(
+                on: volume,
+                policy: policy
+            )
+        }.value
+        guard !candidates.isEmpty else {
+            return CleanupEjectPlan(candidates: [], policy: policy)
+        }
+        switch confirmCleanup(candidates, volume: volume) {
+        case .cleanAndEject:
+            return CleanupEjectPlan(candidates: candidates, policy: policy)
+        case .cancel:
+            return nil
+        }
+    }
+
+    private func confirmCleanup(
+        _ candidates: [RemovableMediaCleanupCandidate],
+        volume: URL
+    ) -> CleanupEjectDecision {
+        let preview = candidates.prefix(8).map { "• \($0.relativePath)" }
+            .joined(separator: "\n")
+        let remaining = candidates.count - min(8, candidates.count)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Clean \(volume.lastPathComponent) before ejecting?"
+        alert.informativeText = "EDIT950 found \(candidates.count) configured metadata item(s) to remove:\n\n"
+            + preview
+            + (remaining > 0 ? "\n• …and \(remaining) more" : "")
+            + "\n\nEDIT950 will verify that every configured item is gone before ejecting. Exceptions and custom cleanup names can be changed in Settings."
+        alert.addButton(withTitle: "Clean & Eject")
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .cleanAndEject
+        default: return .cancel
+        }
+    }
+
+    private func performCleanup(
+        _ plan: CleanupEjectPlan,
+        on volume: URL
+    ) async throws -> RemovableMediaCleanupResult {
+        let result: RemovableMediaCleanupResult
+        if plan.candidates.isEmpty {
+            result = RemovableMediaCleanupResult(
+                removedPaths: [],
+                failures: []
+            )
+        } else {
+            result = try await Task.detached(priority: .userInitiated) {
+                try RemovableMediaCleaner.remove(plan.candidates, from: volume)
+            }.value
+        }
+        if !result.failures.isEmpty {
+            let detail = result.failures.prefix(20).map {
+                "\($0.relativePath): \($0.message)"
+            }.joined(separator: "\n")
+            diagnosticLog += "[\(Date.formattedLogTime)] Safe Eject stopped after \(result.failures.count) cleanup failure(s) on \(volume.lastPathComponent):\n\(detail)\n\n"
+            throw AppError.verificationFailed(
+                cleanupFailureMessage(
+                    volume: volume,
+                    detail: detail
+                )
+            )
+        }
+
+        let remaining = try await Task.detached(priority: .userInitiated) {
+            try RemovableMediaCleaner.candidates(
+                on: volume,
+                policy: plan.policy
+            )
+        }.value
+        guard remaining.isEmpty else {
+            let detail = remaining.prefix(20).map(\.relativePath)
+                .joined(separator: "\n")
+            diagnosticLog += "[\(Date.formattedLogTime)] Safe Eject verification found \(remaining.count) remaining metadata item(s) on \(volume.lastPathComponent):\n\(detail)\n\n"
+            throw AppError.verificationFailed(
+                cleanupFailureMessage(
+                    volume: volume,
+                    detail: "Still present after cleanup:\n\(detail)"
+                )
+            )
+        }
+        return result
+    }
+
+    private func cleanupFailureMessage(
+        volume: URL,
+        detail: String
+    ) -> String {
+        "Safe Eject stopped because \(volume.lastPathComponent) could not be verified clean. The volume remains mounted.\n\n\(detail)\n\nGrant EDIT950 Full Disk Access in System Settings → Privacy & Security → Full Disk Access, quit and reopen EDIT950, then try again."
+    }
+
+    private func successfulEjectDetail(
+        for result: RemovableMediaCleanupResult
+    ) -> String {
+        var details: [String] = []
+        if !result.removedPaths.isEmpty {
+            details.append(
+                "Removed \(result.removedPaths.count) configured metadata item(s)."
+            )
+        }
+        details.append("Verified that no configured metadata items remain.")
+        details.append(
+            "macOS cleanly unmounted the volume. It is safe to unplug."
+        )
+        return details.joined(separator: " ")
     }
 
     func copyToUSBAndEject() {
@@ -4924,21 +5060,48 @@ final class AppModel: ObservableObject {
         guard let session, !session.isRemovable else { throw AppError.usbVolumeNotFound }
         let destinationVolume = USBVolumeResolver.owningVolume(for: destination)
         guard let destinationVolume else { throw AppError.usbVolumeNotFound }
-        progress = OperationProgress(kind: .copying, current: 0, total: 3, detail: destination.path)
+        let totalSteps = settings.ejectAfterUSBCopy ? 4 : 3
+        progress = OperationProgress(
+            kind: .copying,
+            current: 0,
+            total: totalSteps,
+            detail: destination.path
+        )
         await controller.close()
         self.session = nil
         try ImageFileOperations.copyAtomicallyAndVerify(source: session.imageURL, destination: destination)
         updateProgress(2, detail: "Copy verified")
         if settings.ejectAfterUSBCopy {
-            guard let usbClean = settings.usbCleanURL else { throw AppError.usbCleanNotFound }
-            try await ImageFileOperations.handToUSBclean(volume: destinationVolume, application: usbClean)
-            updateProgress(2, detail: "Waiting for \(destinationVolume.lastPathComponent) to unmount")
+            guard let cleanupPlan = try await prepareCleanupPlan(
+                for: destinationVolume
+            ) else {
+                updateProgress(4, detail: "Copy complete; media remains mounted")
+                publishSuccess(
+                    title: "USB Copy Complete",
+                    lines: [
+                        "Destination: \(destination.path)",
+                        "File size and SHA-256 checksum verified.",
+                        "Safe eject was cancelled; the volume remains mounted."
+                    ]
+                )
+                progress = nil
+                return
+            }
+            let cleanupResult = try await performCleanup(
+                cleanupPlan,
+                on: destinationVolume
+            )
+            updateProgress(
+                3,
+                detail: "Asking macOS to safely eject \(destinationVolume.lastPathComponent)"
+            )
+            try await ImageFileOperations.safelyEject(volume: destinationVolume)
             try await ImageFileOperations.waitUntilUnmounted(volume: destinationVolume)
-            updateProgress(3, detail: "Safe to unplug")
+            updateProgress(4, detail: "Safe to unplug")
             report = nil
             headerNotice = HeaderNotice(
                 title: "Copy verified; \(destinationVolume.lastPathComponent) safely ejected",
-                detail: "The volume is no longer mounted and is safe to unplug.",
+                detail: successfulEjectDetail(for: cleanupResult),
                 systemImage: "checkmark.circle.fill"
             )
         } else {
@@ -6051,15 +6214,14 @@ final class AppModel: ObservableObject {
             }
             tagLibraryDirectoryURL = destinationURL
             applyTagDocument(try tagLibrary.load())
-            report = OperationReport(
+            publishSuccess(
                 title: "Shared Tag Index Location Updated",
                 lines: [
                     "EDIT950 and FIND950 now use:",
                     tagLibrary.fileURL.path,
                     "A backup copy remains at:",
                     previousURL.appendingPathComponent(SharedTagLibrary.filename).path
-                ],
-                isError: false
+                ]
             )
         } catch {
             reportError(error)
@@ -6107,6 +6269,10 @@ final class AppModel: ObservableObject {
         headerNotice = nil
         report = OperationReport(title: "EDIT950", lines: [message], isError: true)
         if settings.autoOpenLogOnError { isLogVisible = true }
+    }
+
+    func dismissReport() {
+        report = nil
     }
 
     func publishSuccess(

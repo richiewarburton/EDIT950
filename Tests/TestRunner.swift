@@ -178,12 +178,12 @@ struct TestRunner {
 
         test("950TOOLS responses identify the running EDIT950 bundle") {
             let sender = Tools950Interop.responseSender(infoDictionary: [
-                "CFBundleShortVersionString": "1.8.22",
-                "CFBundleVersion": "40"
+                "CFBundleShortVersionString": "1.8.23",
+                "CFBundleVersion": "41"
             ])
             try expect(sender.productID == "com.e45recordings.EDIT950")
-            try expect(sender.version == "1.8.22")
-            try expect(sender.build == "40")
+            try expect(sender.version == "1.8.23")
+            try expect(sender.build == "41")
         }
 
         test("950TOOLS protocol rejects unknown versions and incomplete export requests") {
@@ -1903,6 +1903,144 @@ struct TestRunner {
             let secondBytes = try Data(contentsOf: second)
             try expect(firstBytes == bytes)
             try expect(secondBytes == bytes)
+        }
+
+        test("built-in removable-media cleanup rules match FIND950") {
+            try expect(RemovableMediaCleanupPolicy.defaultNames == [
+                ".DS_Store", "._*", "._AppleDouble", ".AppleDouble", ".fseventsd",
+                ".VolumeIcon.icns", ".TemporaryItems",
+                ".DocumentRevisions-V100", ".Spotlight-V100", ".Trashes",
+                ".localized", ".AppleDB", ".apdisk", "Thumbs.db",
+                "Desktop.ini", ".syncing_db", ".Trash",
+                ".metadata_never_index", ".bzvol", ".dbxignore",
+                "System Volume Information", "$RECYCLE.BIN", "RECYCLED"
+            ])
+            try expect(
+                RemovableMediaCleanupPolicy().activeNames.count
+                    == RemovableMediaCleanupPolicy.defaultNames.count
+            )
+        }
+
+        test("safe eject cleanup removes only configured metadata names") {
+            let root = try temporaryDirectory("removable-cleanup")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let samples = root.appendingPathComponent("Samples", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: samples,
+                withIntermediateDirectories: true
+            )
+            let rootMetadata = root.appendingPathComponent(".DS_Store")
+            let nestedMetadata = samples.appendingPathComponent("Thumbs.db")
+            let keptMetadata = samples.appendingPathComponent("Desktop.ini")
+            let custom = samples.appendingPathComponent("SAMPLER.CACHE")
+            let appleDouble = samples.appendingPathComponent("._beat-disk.img")
+            let similarlyNamed = samples.appendingPathComponent("Thumbs.db.backup")
+            for url in [
+                rootMetadata,
+                nestedMetadata,
+                keptMetadata,
+                custom,
+                appleDouble,
+                similarlyNamed
+            ] {
+                try Data([0x01]).write(to: url)
+            }
+
+            var policy = RemovableMediaCleanupPolicy()
+            try policy.addCustomName("SAMPLER.CACHE")
+            try policy.addException("Samples/Desktop.ini")
+            let candidates = try RemovableMediaCleaner.candidates(
+                on: root,
+                policy: policy
+            )
+            try expect(Set(candidates.map(\.relativePath)) == [
+                ".DS_Store",
+                "Samples/Thumbs.db",
+                "Samples/SAMPLER.CACHE",
+                "Samples/._beat-disk.img"
+            ])
+            let result = try RemovableMediaCleaner.remove(
+                candidates,
+                from: root
+            )
+            try expect(result.failures.isEmpty)
+            try expect(Set(result.removedPaths) == Set(candidates.map(\.relativePath)))
+            try expect(!FileManager.default.fileExists(atPath: rootMetadata.path))
+            try expect(!FileManager.default.fileExists(atPath: nestedMetadata.path))
+            try expect(!FileManager.default.fileExists(atPath: custom.path))
+            try expect(!FileManager.default.fileExists(atPath: appleDouble.path))
+            try expect(FileManager.default.fileExists(atPath: keptMetadata.path))
+            try expect(FileManager.default.fileExists(atPath: similarlyNamed.path))
+            let remaining = try RemovableMediaCleaner.candidates(
+                on: root,
+                policy: policy
+            )
+            try expect(remaining.isEmpty)
+        }
+
+        test("incomplete cleanup inspection directs the user to Full Disk Access") {
+            let description = RemovableMediaCleanupError
+                .enumerationFailed("/Volumes/AKAI/.Spotlight-V100")
+                .errorDescription ?? ""
+            try expect(description.contains("Full Disk Access"))
+        }
+
+        test("cleanup exceptions preserve matching parent directories") {
+            let root = try temporaryDirectory("removable-cleanup-exception")
+            defer { try? FileManager.default.removeItem(at: root) }
+            let trash = root.appendingPathComponent(".Trashes", isDirectory: true)
+            let kept = trash.appendingPathComponent("Keep Me.txt")
+            try FileManager.default.createDirectory(
+                at: trash,
+                withIntermediateDirectories: true
+            )
+            try Data([0x01]).write(to: kept)
+
+            var policy = RemovableMediaCleanupPolicy()
+            try policy.addException(".Trashes/Keep Me.txt")
+            let candidates = try RemovableMediaCleaner.candidates(
+                on: root,
+                policy: policy
+            )
+            try expect(!candidates.contains { $0.relativePath == ".Trashes" })
+            try expect(FileManager.default.fileExists(atPath: kept.path))
+        }
+
+        test("partial metadata cleanup reports failures and keeps successful removals") {
+            let root = try temporaryDirectory("removable-cleanup-partial")
+            let outside = root.deletingLastPathComponent().appendingPathComponent(
+                "outside-cleanup-\(UUID().uuidString)"
+            )
+            defer {
+                try? FileManager.default.removeItem(at: root)
+                try? FileManager.default.removeItem(at: outside)
+            }
+            try Data([0x01]).write(to: outside)
+            let removable = root.appendingPathComponent(".DS_Store")
+            try Data([0x01]).write(to: removable)
+            let candidates = [
+                RemovableMediaCleanupCandidate(
+                    url: outside,
+                    relativePath: ".Spotlight-V100",
+                    isDirectory: true
+                ),
+                RemovableMediaCleanupCandidate(
+                    url: removable,
+                    relativePath: ".DS_Store",
+                    isDirectory: false
+                )
+            ]
+
+            let result = try RemovableMediaCleaner.remove(
+                candidates,
+                from: root
+            )
+            try expect(result.removedPaths == [".DS_Store"])
+            try expect(result.failures.map(\.relativePath) == [
+                ".Spotlight-V100"
+            ])
+            try expect(!FileManager.default.fileExists(atPath: removable.path))
+            try expect(FileManager.default.fileExists(atPath: outside.path))
         }
 
         await asyncTest("eject completion waits for the volume to be unmounted") {

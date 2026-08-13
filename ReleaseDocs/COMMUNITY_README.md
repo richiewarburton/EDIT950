@@ -1,4 +1,4 @@
-# EDIT950 1.8.22
+# EDIT950 1.8.23
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -6,9 +6,16 @@ EDIT950 is an independent native macOS application for browsing and managing AKA
 
 The app launches a bundled Universal build of AKAI Util 4.6.7 as a separate
 process. Its complete corresponding GPL-2.0-or-later source is included in the
-release archive. USBclean remains a separate optional product.
+release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
+
+Version 1.8.23 build 41 replaces the optional USBclean handoff with native Safe
+Eject. EDIT950 previews the exact removable-media metadata it will clean, removes
+only approved rules, verifies the volume again and asks macOS to eject it. Any
+cleanup or verification failure leaves the media mounted with a specific error.
+This release also adds the full user guide and clarifies that bundled Universal
+AKAI Util 4.6.7 handles IMG filesystem operations while Safe Eject is native.
 
 Version 1.8.22 build 40 refines the yellow selection into one clean row without
 the competing blue macOS outline. It also removes the duplicate View menu and
@@ -71,6 +78,8 @@ Hardware testing has only been performed with an AKAI S950 fitted with a GOTEK d
 - `LICENSE` — MIT licence for EDIT950.
 - `THIRD-PARTY-NOTICES.txt` — official third-party download, source and licensing information.
 - `TEST_REPORT.md` — automated and genuine-image validation results.
+- `Documentation/` — the musician's user guide plus AKAI Util and native-format
+  technical documentation.
 - `Screenshots/` — the current IMG browser, P9 editor and safety/settings views.
 - `SHA256SUMS.txt` — integrity checksums for the packaged files.
 - `AKAI Util 4.6.7 Source/` — exact corresponding source, licence, upstream
@@ -82,7 +91,6 @@ Hardware testing has only been performed with an AKAI S950 fitted with a GOTEK d
 - No separate AKAI Util installation and no Rosetta. AKAI Util 4.6.7 is bundled
   as a Universal arm64/x86_64 helper.
 - A macOS audio editor of your choice is optional and needed only for direct S9 editing.
-- USBclean is optional and is used only by the Clean Eject feature.
 - Ableton Live 12.4.3 is required only to open the generated Drum Rack; Ableton is not needed for the app’s IMG, S9 or P9 functions.
 
 EDIT950 itself is Universal and runs natively on both Apple silicon and Intel Macs.
@@ -114,26 +122,12 @@ Direct S9 audio editing works with a macOS application that can open and save PC
 
 The audio editor is not bundled and is not otherwise required. EDIT950 does not depend on a particular commercial or open-source editor.
 
-### 3. Optional: install USBclean
-
-USBclean is required only for **Clean Eject**. Normal image browsing, import, export, backup and closing do not require it.
-
-Official product page:
-
-https://usbclean.sweetpproductions.com/
-
-Mac App Store:
-
-https://apps.apple.com/gb/app/usbclean/id907406031?mt=12
-
-Install it as `/Applications/USBclean.app`, or choose a different location in EDIT950 Settings.
-
 ## Quick start
 
 1. Back up valuable IMG files before enabling write access.
 2. Open an IMG or ISO using the Open button, Finder, or drag and drop.
 3. Select files in the table.
-4. Use Import, Export, Delete, Disk Info, Clean Eject or Backup from the toolbar.
+4. Use Import, Export, Delete, Disk Info, Safe Eject or Backup from the toolbar.
 
 Click Name, Type or Size to sort the IMG table. Sorting does not change the underlying AKAI file indexes used for editing, copying or deletion.
 
@@ -304,7 +298,13 @@ Unknown P9 bytes and sampler-maintained address fields are preserved unless a do
 - The app never exposes physical-drive formatting.
 - New-image, format and sample-conversion choices are limited to the S950 workflows described in this README.
 - Commands are serialized so only one AKAI Util operation runs at a time.
-- Clean Eject closes AKAI Util, hands the exact mounted volume to USBclean, waits for it to unmount, and then reports **Safe to unplug** in the header without a confirmation dialog.
+- Safe Eject previews configurable metadata cleanup rules, closes AKAI Util,
+  performs the approved cleanup inside the selected volume only, asks macOS to
+  unmount and eject it, verifies that it is no longer mounted, and then reports
+  **Safe to unplug** in the header. Cancel remains available in the preview.
+  EDIT950 re-scans before ejecting and leaves the volume mounted if any configured
+  metadata remains or the scan is incomplete. Full Disk Access is required to
+  remove protected `.Spotlight-V100` data.
 - Successful operations report through the same non-blocking header style. Errors and confirmations before destructive actions remain dialogs.
 - Imported source WAV, S9 and P9 files are staged through temporary copies and are not modified. The temporary WAV intentionally opened for external S9 editing is the only staged file the chosen editor is expected to change.
 - Closing a P9 edit that has neither been written to the IMG nor saved as an edited copy requires confirmation.
@@ -317,9 +317,10 @@ Unknown P9 bytes and sampler-maintained address fields are preserved unless a do
 
 ## Troubleshooting
 
-### “AKAI Util is not executable” or “not detected”
+### “AKAI Util is missing or damaged”
 
-Choose the executable again in Settings. If needed, apply the `chmod +x` command shown above.
+AKAI Util is included inside EDIT950. Reinstall EDIT950 from the verified release
+ZIP; no path selection or `chmod` command is required.
 
 ### Apple-silicon Mac asks for Rosetta
 
@@ -335,9 +336,10 @@ Try opening it once, then use **System Settings → Privacy & Security → Open 
 
 The image is read-only, the current volume is not identified as S950 format, or another operation is still finishing.
 
-### Clean Eject is disabled
+### Safe Eject is disabled
 
-USBclean is optional and must be installed or selected in Settings. The IMG must also be located on a mounted volume under `/Volumes`.
+The IMG must be located on mounted removable media under `/Volumes`, and no
+other serialized operation can be running.
 
 ### A command fails
 
@@ -367,8 +369,8 @@ EDIT950 contains no telemetry, analytics, advertising or updater. It does not ma
 
 See `THIRD-PARTY-NOTICES.txt` for official sources and terms.
 
-AKAI is a trademark of its respective owner. EDIT950 is an independent community project and is not affiliated with or endorsed by Akai Professional. USBclean is a product of SweetP Productions, Inc.
+AKAI is a trademark of its respective owner. EDIT950 is an independent community project and is not affiliated with or endorsed by Akai Professional.
 
 ## Known distribution limitation
 
-This EDIT950 build is ad-hoc signed and is not notarized. A future Developer ID/notarized EDIT950 distribution would provide the normal verified-developer launch experience.
+This build is ad-hoc signed and is not notarized. A future public release should ideally be signed with an Apple Developer ID certificate and notarized so community users receive the normal verified-developer launch experience.

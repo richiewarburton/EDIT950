@@ -35,6 +35,7 @@ cp ReleaseDocs/COMMUNITY_README.md "$PACKAGE_DIR/README.md"
 cp LICENSE "$PACKAGE_DIR/LICENSE"
 cp ReleaseDocs/THIRD-PARTY-NOTICES.txt "$PACKAGE_DIR/THIRD-PARTY-NOTICES.txt"
 cp TEST_REPORT.md "$PACKAGE_DIR/TEST_REPORT.md"
+/usr/bin/ditto Documentation "$PACKAGE_DIR/Documentation"
 /usr/bin/ditto ThirdParty/akaiutil-4.6.7 "$PACKAGE_DIR/AKAI Util 4.6.7 Source"
 
 (
@@ -46,6 +47,8 @@ cp TEST_REPORT.md "$PACKAGE_DIR/TEST_REPORT.md"
     "LICENSE" \
     "THIRD-PARTY-NOTICES.txt" \
     "TEST_REPORT.md" \
+    "Documentation/USER_GUIDE.md" \
+    "Documentation/AKAI_UTIL_UNIVERSAL.md" \
     "Screenshots/edit950-browser.png" \
     "Screenshots/edit950-p9-editor.png" \
     "Screenshots/edit950-shared-tag-settings.png" \

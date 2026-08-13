@@ -117,14 +117,33 @@ struct MainView: View {
             get: { model.report?.isError == true ? model.report : nil },
             set: { model.report = $0 }
         )) { report in
-            Alert(
-                title: Text(report.title),
-                message: Text(report.lines.joined(separator: "\n")),
-                dismissButton: .default(Text("OK"))
-            )
+            let message = report.lines.joined(separator: "\n")
+            if message.localizedCaseInsensitiveContains("Full Disk Access") {
+                return Alert(
+                    title: Text(report.title),
+                    message: Text(message),
+                    primaryButton: .default(Text("Open Full Disk Access")) {
+                        model.dismissReport()
+                        AppSettings.openFullDiskAccessSettings()
+                    },
+                    secondaryButton: .cancel(Text("OK")) {
+                        model.dismissReport()
+                    }
+                )
+            } else {
+                return Alert(
+                    title: Text(report.title),
+                    message: Text(message),
+                    dismissButton: .default(Text("OK")) {
+                        model.dismissReport()
+                    }
+                )
+            }
         }
         .alert("Delete selected files permanently?", isPresented: $model.showDeleteConfirmation) {
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                model.showDeleteConfirmation = false
+            }
             Button("Delete", role: .destructive) { model.deleteSelected() }
         } message: {
             Text(model.selectedFiles.map { "\($0.index). \($0.name)" }.joined(separator: "\n")
@@ -221,14 +240,13 @@ struct MainView: View {
             .help("Create a verified timestamped backup of the open image")
 
             Button(action: model.cleanEject) {
-                Label("Clean Eject", systemImage: "eject")
+                Label("Safe Eject", systemImage: "eject")
             }
             .disabled(
                 model.session?.isRemovable != true
-                    || settings.usbCleanURL == nil
                     || model.isBusy
             )
-            .help("Clean and safely eject the mounted removable volume")
+            .help("Clean metadata, then safely eject the mounted removable volume")
 
             Button {
                 model.showTagManager = true
@@ -281,7 +299,7 @@ struct MainView: View {
                 .disabled(!model.canMutate || model.snapshot.files.isEmpty)
                 Divider()
                 if model.session?.isRemovable == true {
-                    Button("Clean and Eject") { model.cleanEject() }
+                    Button("Clean and Safely Eject") { model.cleanEject() }
                 }
                 if let destination = model.usbCopyDestination {
                     Button("Copy to \(destination.deletingLastPathComponent().lastPathComponent) and Eject…") {
@@ -1385,7 +1403,7 @@ private struct EditInspector: View {
                     Menu { ImageTagMenuContent() } label: { SuiteMenuLabel(title: "TAGS", systemImage: "tag") }.menuStyle(.borderlessButton)
                     Button("DISK INFORMATION…") { model.showDiskInfo = true }.buttonStyle(SuiteSecondaryButtonStyle())
                     Button("BACKUP") { model.backupImage() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(model.isBusy)
-                    if model.session?.isRemovable == true { Button("CLEAN EJECT") { model.cleanEject() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(model.isBusy) }
+                    if model.session?.isRemovable == true { Button("SAFE EJECT") { model.cleanEject() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(model.isBusy) }
                     Button("SHOW IN FINDER") { if let url = model.session?.imageURL { NSWorkspace.shared.activateFileViewerSelecting([url]) } }.buttonStyle(SuiteSecondaryButtonStyle())
                 }
             }

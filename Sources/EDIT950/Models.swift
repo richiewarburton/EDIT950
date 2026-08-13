@@ -162,7 +162,7 @@ enum OperationKind: String {
     case renaming = "Renaming AKAI file"
     case editingSample = "Editing S9 sample"
     case copying = "Copying to USB"
-    case ejecting = "Cleaning and ejecting"
+    case ejecting = "Cleaning and safely ejecting"
 }
 
 struct P9OverwriteResult: Equatable {
@@ -292,7 +292,6 @@ enum AppError: LocalizedError {
     case insufficientSpace(required: Int64, available: Int64)
     case unsupportedWAV(String)
     case usbVolumeNotFound
-    case usbCleanNotFound
     case verificationFailed(String)
 
     var errorDescription: String? {
@@ -309,7 +308,6 @@ enum AppError: LocalizedError {
             return "The import needs \(required.formattedByteCount), but only \(available.formattedByteCount) is free."
         case .unsupportedWAV(let detail): return "The WAV file could not be prepared: \(detail)"
         case .usbVolumeNotFound: return "No exact mounted USB destination was found."
-        case .usbCleanNotFound: return "USBclean could not be found."
         case .verificationFailed(let detail): return "Verification failed: \(detail)"
         }
     }

@@ -1,6 +1,6 @@
 # EDIT950 — Complete Source
 
-This is the complete buildable source project for EDIT950 1.8.22, build 40.
+This is the complete buildable source project for EDIT950 1.8.23, build 41.
 
 ## Included
 
@@ -18,10 +18,11 @@ This is the complete buildable source project for EDIT950 1.8.22, build 40.
 Compiled `.build/` contents, the `Build/` distribution directory, Finder metadata and private user fixtures are deliberately excluded. They are outputs or test inputs, not application source.
 
 The application bundles AKAI Util as a clearly separate executable and includes
-its exact corresponding source. EDIT950 does not link to AKAI Util;
-it launches the helper as a subprocess. USBclean, audio samples and disk images
-are not bundled. Licensing of this separation should receive human review before
-public distribution.
+its exact corresponding source. EDIT950 does not link to AKAI Util; it launches
+the helper as a subprocess. Removable-media metadata cleanup and safe eject are
+implemented in EDIT950 with Apple system APIs. Audio samples and disk images are
+not bundled. Licensing of the AKAI Util separation should receive human review
+before public distribution.
 
 ## Requirements
 
@@ -29,7 +30,6 @@ public distribution.
 - Apple command-line developer tools with Swift.
 - Xcode command-line C compiler and `lipo`, used to build the bundled Universal
   AKAI Util 4.6.7 helper.
-- USBclean only for the optional Clean Eject feature.
 - Ableton Live 12.4.3 or a compatible later Live 12 release only for opening exported Drum Racks; Ableton is not required to build or run the image-management features.
 
 No third-party Swift package is required.

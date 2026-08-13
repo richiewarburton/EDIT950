@@ -4,10 +4,10 @@ EDIT950 — THIRD-PARTY TOOLS AND SOURCES
 AKAI Util is bundled as a clearly separate executable and launched as a
 subprocess; it is not linked into EDIT950. Its complete corresponding
 source accompanies the distributed application. The application otherwise uses
-Apple system frameworks and launches separately installed optional tools only
-when their features are requested. One sanitized, audio-free Ableton
+Apple system frameworks and launches a user-selected audio editor only when
+that feature is requested. One sanitized, audio-free Ableton
 Live user-preset template is included as application data for Drum Rack export;
-see section 4.
+see section 3.
 
 
 1. AKAI Util
@@ -52,34 +52,7 @@ Architecture and local change:
   macros before AKAI Util's existing declarations. Rosetta is not required.
 
 
-2. USBclean
------------
-
-Purpose:
-  Optional application used only by EDIT950's Clean Eject action.
-
-Developer:
-  SweetP Productions, Inc.
-
-Official product page:
-  https://usbclean.sweetpproductions.com/
-
-Official developer site:
-  https://sweetpproductions.com/
-
-Mac App Store:
-  https://apps.apple.com/gb/app/usbclean/id907406031?mt=12
-
-Support:
-  https://support.sweetpproductions.com/category/20/usbclean
-
-Terms:
-  USBclean is proprietary commercial software. Its source code is not published
-  as part of EDIT950, and USBclean is not included in this ZIP.
-  Obtain and license it directly from SweetP Productions or the Mac App Store.
-
-
-3. User-selected audio editor
+2. User-selected audio editor
 -----------------------------
 
 Purpose:
@@ -88,11 +61,11 @@ Purpose:
 
 Terms:
   No audio editor is included or required for the rest of EDIT950.
-  Users choose and license their preferred editor independently. AKAI Image
-  Manager does not link to, redistribute, or depend on a particular editor.
+  Users choose and license their preferred editor independently. EDIT950 does
+  not link to, redistribute, or depend on a particular editor.
 
 
-4. Ableton Live user-preset template
+3. Ableton Live user-preset template
 ------------------------------------
 
 Purpose:
@@ -114,7 +87,7 @@ Official product site:
   https://www.ableton.com/live/
 
 
-5. Apple system components
+4. Apple system components
 --------------------------
 
 EDIT950 uses SwiftUI, AppKit, AVFoundation, UniformTypeIdentifiers
@@ -130,7 +103,5 @@ Trademarks
 
 AKAI and related product names are trademarks of their respective owners.
 Ableton and Live are trademarks of Ableton AG.
-USBclean is a product of SweetP Productions, Inc.
 EDIT950 is independent and is not affiliated with or endorsed by
-Akai Professional, Ableton AG, Klaus Michael Indlekofer, Midi-In, or SweetP
-Productions.
+Akai Professional, Ableton AG, Klaus Michael Indlekofer, or Midi-In.

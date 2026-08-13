@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.22 (build 40)**  
+Current source: **1.8.23 (build 41)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -17,8 +17,9 @@ Run the self-contained application suite with:
 
 The suite covers IMG directory presentation, native P9/S9 handling, WAV
 conversion, tags, selection, drag and drop, read-only controls, Ableton
-import/export mapping, inter-application requests and write-verification logic.
-The current accepted run completed with **66 passed and 0 failed**.
+import/export mapping, inter-application requests, removable-media cleanup and
+write-verification logic. The current accepted run completed with **71 passed
+and 0 failed**.
 
 The following broader checks are also available:
 
@@ -70,6 +71,9 @@ Automated and manual checks confirm that:
 - failed verified operations restore the complete backup when available;
 - user WAV, P9 and S9 source files are never edited in place;
 - temporary audition files are removed with the session; and
+- removable-media cleanup matches exact configured names, preserves exceptions,
+  refuses unsafe roots, reports partial deletion, and supports a strict
+  verification scan before native macOS eject; and
 - packaged executables contain no development home-directory paths.
 
 ## Release status

@@ -9,13 +9,13 @@
 [![macOS Swift CI](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-ff2a1a.svg)](LICENSE)
 
-## Open and edit the S900/S950 stuff you thought was stranded in the past
+## Open the S900/S950 disks you thought were stranded in the past
 
 If your old sampler floppies now exist as `.img` files, EDIT950 makes
 them useful on a modern Mac. Open an image and see the original volumes, P9
-programs and S9 samples. Audition samples, import/export WAVs, inspect the program 
-that made a sound work, edit native parameters, or build a clean working image for a
-Gotek, another archive or a DAW workflow (PLAY950, perhaps).
+programs and S9 samples. Audition samples, export WAVs, inspect the program that
+made a sound work, edit native parameters, or build a clean working image for a
+Gotek, another archive or a DAW workflow.
 
 This is for people who:
 
@@ -24,13 +24,11 @@ This is for people who:
 - inherited an S900/S950 library but no longer own the sampler;
 - want the original programs and keygroups, not just disconnected WAV files; or
 - still use the hardware and need a safer way to prepare IMG files.
-- still use the hardware but the buttons are a bit dodgy so you need to do all your work in a laptop
-  
 
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
-formats or writes a physical drive. If you want to pretend you have one, use PLAY950.  It's a banger.
+formats or writes a physical drive.
 
-Current source version: **1.8.22 (build 40)**. Requires macOS 14 or later.
+Current source version: **1.8.23 (build 41)**. Requires macOS 14 or later.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
 
@@ -66,8 +64,13 @@ release page states the included application version and checksum. The app is
 ad-hoc signed rather than Developer ID signed or notarized, so macOS may require
 **Privacy & Security → Open Anyway** on first launch.
 
-The application and bundled AKAI Util 4.6.7 helper are Universal Apple Silicon
-and Intel builds. Rosetta and a separate AKAI Util installation are not needed.
+AKAI Util 4.6.7 is included with EDIT950. No separate download, path selection,
+`chmod` command or other Terminal setup is required. The application and helper
+are Universal Apple Silicon and Intel builds. EDIT950 launches the helper
+locally for the underlying read/write IMG filesystem operations.
+
+Safe Eject and removable-media metadata cleanup are handled separately by
+native EDIT950 code; they do not use AKAI Util.
 
 ## Will it open my disk captures?
 
@@ -166,12 +169,6 @@ workflow:
 
 > **Find in FIND950, modify in EDIT950, play and recall in PLAY950.**
 
-Public Universal macOS companion builds are available now: download
-[FIND950](https://github.com/richiewarburton/FIND950/releases/latest) and
-[PLAY950](https://github.com/richiewarburton/PLAY950/releases/latest) from their
-GitHub release pages. Both community builds are ad-hoc signed rather than
-Apple-notarized.
-
 You can use EDIT950 by itself. FIND950 becomes useful when the archive is
 too large to explore image by image. PLAY950 is optional and is for musicians
 who want the recovered programs available as a DAW instrument.
@@ -201,9 +198,17 @@ automatic restoration if replacement or byte verification fails.*
 EDIT950 edits the IMG file, not the sampler or drive. If you own an S950, move the
 verified IMG into the Gotek, USB or disk-writing process you already trust.
 
-For an image stored on removable media, optional USBclean integration supports
-**Clean Eject**. Copy-to-USB uses a temporary destination and verifies size and
-SHA-256 before replacing the exact target filename.
+For an image stored on removable media, **Safe Eject** is built into EDIT950.
+The app previews configurable metadata cleanup, closes AKAI Util, removes only
+approved rules (exact names plus the explicit AppleDouble `._*` sidecar rule),
+verifies that none remain, and asks macOS to cleanly
+unmount and eject the volume. If any configured item cannot be removed or the
+verification scan cannot fully inspect the volume, EDIT950 leaves it mounted and
+reports the exact problem. Grant EDIT950 Full Disk Access to remove protected
+`.Spotlight-V100` data.
+Copy-to-USB uses a temporary destination and verifies size and SHA-256 before
+replacing the exact target filename; optional post-copy eject uses the same
+built-in safety path.
 
 ## Current limitations
 
@@ -213,7 +218,6 @@ SHA-256 before replacing the exact target filename.
   Simpler pad; Drum Sampler and genuine multi-zone/velocity-layer pads are
   rejected.
 - Ableton export uses the Soft layer and maps a ranged keygroup to its Low note.
-- USBclean is a separate optional application.
 
 ## Build and verification
 
@@ -240,13 +244,14 @@ Info.plist and architectures, and applies and checks a deep ad-hoc signature.
   800 KB/1.6 MB S950 image.
 - Import is disabled when the image is read-only, no volume is selected, or
   another serialized operation is running.
-- Clean Eject is disabled for local files and when USBclean is unavailable.
+- Safe Eject is enabled only when the open IMG is on mounted removable media and
+  no other serialized operation is running.
 - EDIT950 stages paths containing spaces because AKAI Util does not accept quoted
   path tokens.
 
 ## Licence
 
 EDIT950 is released under the [MIT License](LICENSE). AKAI Util,
-USBclean, Ableton Live, PLAY950 and FIND950 are separate products
+Ableton Live, PLAY950 and FIND950 are separate products
 with their own licences. This is an independent project and is not affiliated
 with or endorsed by Akai Professional.

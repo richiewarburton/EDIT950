@@ -392,14 +392,17 @@ struct P9EditorSheet: View {
             isPresented: $showBulkSelectionConfirmation
         ) {
             Button("Apply to \(selection.count) Keygroups") {
+                showBulkSelectionConfirmation = false
                 applyBulkEdits(to: selection, announce: false)
                 completePendingSelectionChange()
             }
             Button("Discard Edits", role: .destructive) {
+                showBulkSelectionConfirmation = false
                 bulkEdits = P9BulkEdits()
                 completePendingSelectionChange()
             }
             Button("Cancel", role: .cancel) {
+                showBulkSelectionConfirmation = false
                 pendingSelectionAfterBulkEdits = nil
             }
         } message: {
@@ -412,8 +415,11 @@ struct P9EditorSheet: View {
             "Close Program Without Saving?",
             isPresented: $showCloseConfirmation
         ) {
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) {
+                showCloseConfirmation = false
+            }
             Button("Close Without Saving", role: .destructive) {
+                showCloseConfirmation = false
                 dismiss()
             }
         } message: {

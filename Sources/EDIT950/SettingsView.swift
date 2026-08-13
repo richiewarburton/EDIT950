@@ -11,6 +11,9 @@ struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var preferences: SuitePreferences
     @State private var selectedTab: Tab
+    @State private var customCleanupName = ""
+    @State private var cleanupException = ""
+    @State private var cleanupError: String?
 
     init(initialTab: Tab = .general) {
         _selectedTab = State(initialValue: initialTab)
@@ -92,15 +95,109 @@ struct SettingsView: View {
                     )
                     Toggle("Open diagnostic log when an error occurs", isOn: $settings.autoOpenLogOnError)
                 }
-                Section("USBclean") {
-                    HStack {
-                        TextField("Application", text: $settings.usbCleanPath)
-                        Button("Choose…") { settings.chooseUSBclean() }
-                    }
+                Section("Safe Eject") {
                     Toggle("Clean and eject after a verified USB copy", isOn: $settings.ejectAfterUSBCopy)
-                    Text("Ejection only happens after an explicit Clean Eject action, or after a confirmed USB copy when this preference is enabled.")
+                    Text("EDIT950 removes only the enabled metadata rules, including AppleDouble ._* sidecars, verifies none remain, then asks macOS to safely unmount and eject the volume. Every cleanup is previewed first. Full Disk Access is required to remove protected .Spotlight-V100 data.")
                         .font(SuiteFont.regular(10))
                         .foregroundStyle(Color.suiteUnit)
+                    Button("Open Full Disk Access Settings") {
+                        AppSettings.openFullDiskAccessSettings()
+                    }
+
+                    Text("Default metadata rules")
+                        .font(SuiteFont.medium(11))
+                    LazyVGrid(
+                        columns: [GridItem(.flexible()), GridItem(.flexible())],
+                        alignment: .leading,
+                        spacing: 7
+                    ) {
+                        ForEach(
+                            RemovableMediaCleanupPolicy.defaultNames,
+                            id: \.self
+                        ) { name in
+                            Toggle(name, isOn: Binding(
+                                get: {
+                                    settings.mediaCleanupPolicy
+                                        .isDefaultEnabled(name)
+                                },
+                                set: {
+                                    settings.setDefaultCleanupName(
+                                        name,
+                                        enabled: $0
+                                    )
+                                }
+                            ))
+                            .toggleStyle(.checkbox)
+                        }
+                    }
+
+                    LabeledContent("Custom exact names") {
+                        VStack(alignment: .trailing, spacing: 7) {
+                            ForEach(
+                                settings.mediaCleanupPolicy.customNames,
+                                id: \.self
+                            ) { name in
+                                HStack {
+                                    Text(name).textSelection(.enabled)
+                                    Button {
+                                        settings.removeCustomCleanupName(name)
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("REMOVE CUSTOM CLEANUP NAME")
+                                }
+                            }
+                            HStack {
+                                TextField(
+                                    "e.g. .MySamplerCache",
+                                    text: $customCleanupName
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit(addCustomCleanupName)
+                                Button("Add") { addCustomCleanupName() }
+                                    .disabled(customCleanupName
+                                        .trimmingCharacters(
+                                            in: .whitespacesAndNewlines
+                                        ).isEmpty)
+                            }
+                        }
+                        .frame(maxWidth: 390, alignment: .trailing)
+                    }
+
+                    LabeledContent("Exceptions") {
+                        VStack(alignment: .trailing, spacing: 7) {
+                            ForEach(
+                                settings.mediaCleanupPolicy.exceptions,
+                                id: \.self
+                            ) { exception in
+                                HStack {
+                                    Text(exception).textSelection(.enabled)
+                                    Button {
+                                        settings.removeCleanupException(exception)
+                                    } label: {
+                                        Image(systemName: "minus.circle")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("REMOVE CLEANUP EXCEPTION")
+                                }
+                            }
+                            HStack {
+                                TextField(
+                                    "e.g. Samples/Thumbs.db",
+                                    text: $cleanupException
+                                )
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit(addCleanupException)
+                                Button("Add") { addCleanupException() }
+                                    .disabled(cleanupException
+                                        .trimmingCharacters(
+                                            in: .whitespacesAndNewlines
+                                        ).isEmpty)
+                            }
+                        }
+                        .frame(maxWidth: 390, alignment: .trailing)
+                    }
                 }
                 Section {
                     Button("Restore Defaults", role: .destructive) { settings.restoreDefaults() }
@@ -142,5 +239,31 @@ struct SettingsView: View {
         }
         .padding(12)
         .background(Color.suiteBackground)
+        .alert("Safe Eject Settings", isPresented: Binding(
+            get: { cleanupError != nil },
+            set: { if !$0 { cleanupError = nil } }
+        )) {
+            Button("OK", role: .cancel) { cleanupError = nil }
+        } message: {
+            Text(cleanupError ?? "Unknown error")
+        }
+    }
+
+    private func addCustomCleanupName() {
+        do {
+            try settings.addCustomCleanupName(customCleanupName)
+            customCleanupName = ""
+        } catch {
+            cleanupError = error.localizedDescription
+        }
+    }
+
+    private func addCleanupException() {
+        do {
+            try settings.addCleanupException(cleanupException)
+            cleanupException = ""
+        } catch {
+            cleanupError = error.localizedDescription
+        }
     }
 }

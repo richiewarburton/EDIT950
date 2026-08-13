@@ -64,6 +64,15 @@ cp Resources/BrandAssets/launcher-PLAY950.png "$BRAND_ASSETS_DIR/"
 cp Sources/EDIT950/Resources/AKAI-S950-Sampler-Template.adg \
   "$RESOURCES_DIR/AKAI-S950-Sampler-Template.adg"
 "$PROJECT_DIR/Scripts/build-akaiutil-universal.sh" "$RESOURCES_DIR/akaiutil"
+# Remove intermediates left by earlier local builds; only the Universal helper ships.
+for LEGACY_HELPER_SLICE in \
+  "$RESOURCES_DIR/akaiutil-arm64" \
+  "$RESOURCES_DIR/akaiutil-x86_64"
+do
+  if [ -f "$LEGACY_HELPER_SLICE" ]; then
+    unlink "$LEGACY_HELPER_SLICE"
+  fi
+done
 chmod 755 "$MACOS_DIR/EDIT950"
 chmod 755 "$RESOURCES_DIR/akaiutil"
 
