@@ -1,4 +1,4 @@
-# EDIT950 1.8.24
+# EDIT950 1.8.25
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -9,6 +9,23 @@ process. Its complete corresponding GPL-2.0-or-later source is included in the
 release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
+
+Version 1.8.25 build 43 adds a recent-IMG launch dashboard with verified working
+copy, FIND950 and PLAY950 actions, double-click loading and 200 rotating hints.
+The fixed app identity header remains legible while Display zoom applies to the
+working browser and the new home screen. The S9 editor now provides a collapsible
+two-octave pitch keyboard, a blue root key, explicit octave controls, authentic
+sampler-style varispeed and a choice between immediate click audition or selecting
+the note triggered by Space. Loop-point arrow buttons use their full visible hit
+area, editor controls have consistent styling and long messages wrap.
+
+This release also fixes the sample editor remaining open after a verified,
+backed-up loop-mode replacement. EDIT950 and FIND950 now share a cross-app
+removable-volume interlock: active companion work blocks Safe Eject before any
+metadata is removed, while idle cached FIND950 content remains searchable and is
+marked offline after a successful eject. A persistent, size-limited diagnostic
+timeline is visible to the user, excludes IMG/audio contents, shortens private
+paths and can be copied, saved, revealed or cleared.
 
 Version 1.8.24 build 42 changes the licence for original EDIT950 material from
 MIT to PolyForm Internal Use 1.0.0. Personal, educational and internal

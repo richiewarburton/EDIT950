@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var isLogVisible = false
     let tagLibraryFileURL = URL(
         fileURLWithPath: "/Users/example/Dropbox/950TOOLS Shared Tags/tags-v2.json"
     )
@@ -12,6 +13,8 @@ final class AppModel: ObservableObject {
     func resetTagLibraryDirectory() {}
     func chooseTagLibraryDirectory() {}
     func exportTagIndex() {}
+    func saveDiagnosticLog() {}
+    func revealDiagnosticLog() {}
 }
 
 @main
@@ -45,11 +48,18 @@ struct SettingsVisualRunner {
             defaultInspectorVisible: false,
             defaults: defaults
         )
+        let initialTab: SettingsView.Tab = switch ProcessInfo.processInfo.environment[
+            "EDIT950_SETTINGS_TAB"
+        ] {
+        case "general": .general
+        case "safety": .safety
+        default: .tags
+        }
 
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
         NSApplication.shared.finishLaunching()
-        let root = SettingsView(initialTab: .tags)
+        let root = SettingsView(initialTab: initialTab)
             .environmentObject(settings)
             .environmentObject(model)
             .environmentObject(suitePreferences)

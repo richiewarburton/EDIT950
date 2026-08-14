@@ -26,6 +26,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/AbletonDrumRackImport.swift \
   Sources/EDIT950/AbletonDrumRackExport.swift \
   Sources/EDIT950/WAVService.swift \
+  Sources/EDIT950/DiagnosticLogStore.swift \
+  Sources/EDIT950/VolumeCoordination.swift \
   Sources/EDIT950/AppSettings.swift \
   Tests/TestRunner.swift \
   -o "$BUILD_DIR/EDIT950Tests" \

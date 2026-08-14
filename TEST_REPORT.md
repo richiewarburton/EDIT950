@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.24 (build 42)**
+Current source: **1.8.25 (build 43)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -18,7 +18,7 @@ Run the self-contained application suite with:
 The suite covers IMG directory presentation, native P9/S9 handling, WAV
 conversion, tags, selection, drag and drop, read-only controls, Ableton
 import/export mapping, inter-application requests, removable-media cleanup and
-write-verification logic. The current accepted run completed with **71 passed
+write-verification logic. The current accepted run completed with **73 passed
 and 0 failed**.
 
 The following broader checks are also available:

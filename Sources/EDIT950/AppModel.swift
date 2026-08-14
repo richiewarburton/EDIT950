@@ -68,13 +68,18 @@ private final class PendingImageUndoSnapshot {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published private(set) var session: ImageSession?
+    @Published private(set) var session: ImageSession? {
+        didSet {
+            guard session == nil else { return }
+            imageVolumeUseLease?.release()
+            imageVolumeUseLease = nil
+        }
+    }
     @Published private(set) var snapshot = DiskSnapshot()
     @Published var selection = Set<AkaiFile.ID>()
     @Published var fileSortOrder = [KeyPathComparator<AkaiFile>]()
     @Published var progress: OperationProgress?
     @Published var report: OperationReport?
-    @Published var diagnosticLog = ""
     @Published var isLogVisible = false
     @Published var showImportSheet = false
     @Published var pendingImportURLs: [URL] = []
@@ -106,8 +111,11 @@ final class AppModel: ObservableObject {
 
     weak var undoManager: UndoManager?
 
+    let diagnostics = DiagnosticLogStore(appName: "EDIT950")
     let settings: AppSettings
     private let controller = AkaiCommandController()
+    private let volumeCoordination = VolumeCoordinationCenter(appName: "EDIT950")
+    private var imageVolumeUseLease: VolumeUseLease?
     private var currentOperationTask: Task<Void, Never>?
     private var recentURLs: [URL] = []
     private var keygroupTransferWorkspace: TemporaryWorkspace?
@@ -148,6 +156,12 @@ final class AppModel: ObservableObject {
                 lines: ["Couldn’t load shared library tags: \(error.localizedDescription)"],
                 isError: true
             )
+            diagnostics.record(
+                .error,
+                category: "tags",
+                message: "Could not load shared library tags",
+                fields: ["error": error.localizedDescription]
+            )
         }
         sampleAudition.onPlaybackEnded = { [weak self] in
             self?.finishSampleAudition()
@@ -161,6 +175,12 @@ final class AppModel: ObservableObject {
             Task { @MainActor in model.reloadSharedTags() }
         }
         loadRecentImages()
+        diagnostics.record(
+            .info,
+            category: "lifecycle",
+            message: "Application model ready",
+            fields: ["recentImages": String(recentImages.count)]
+        )
     }
 
     deinit {
@@ -460,6 +480,7 @@ final class AppModel: ObservableObject {
     }
 
     func openPanel() {
+        diagnostics.record(.info, category: "ui", message: "Open IMG dialogue shown")
         let panel = NSOpenPanel()
         panel.title = "Open AKAI Image"
         panel.prompt = "Open"
@@ -470,12 +491,172 @@ final class AppModel: ObservableObject {
             UTType(filenameExtension: "iso") ?? .data,
             .data
         ]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else {
+            diagnostics.record(.info, category: "ui", message: "Open IMG dialogue cancelled")
+            return
+        }
         start { try await self.openImage(url, readOnly: self.currentReadOnlyChoice) }
     }
 
     func openRecent(_ url: URL) {
+        diagnostics.record(
+            .info,
+            category: "ui",
+            message: "Recent IMG selected",
+            fields: ["image": url.path]
+        )
         start { try await self.openImage(url, readOnly: self.currentReadOnlyChoice) }
+    }
+
+    func copyDiagnosticLog() {
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Log copied by user"
+        )
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnostics.text, forType: .string)
+    }
+
+    func saveDiagnosticLog() {
+        let panel = NSSavePanel()
+        panel.title = "Save EDIT950 Diagnostic Log"
+        panel.message = "The report contains the rolling activity timeline, app version and operation state. Home and temporary paths are shortened. It contains no audio or IMG data."
+        panel.prompt = "Save Diagnostic Log"
+        panel.nameFieldStringValue = "EDIT950-diagnostic-\(Self.diagnosticFileStamp()).log"
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Diagnostic log exported by user",
+            fields: ["destination": destination.path]
+        )
+        do {
+            try diagnostics.saveCopy(to: destination)
+            publishSuccess(
+                title: "Diagnostic Log Saved",
+                lines: [destination.path]
+            )
+        } catch {
+            reportError(error)
+        }
+    }
+
+    func revealDiagnosticLog() {
+        diagnostics.record(
+            .info,
+            category: "diagnostics",
+            message: "Live diagnostic log revealed in Finder"
+        )
+        NSWorkspace.shared.activateFileViewerSelecting([diagnostics.fileURL])
+    }
+
+    func clearDiagnosticLog() {
+        diagnostics.clear()
+    }
+
+    func createCopyAndOpen(_ source: URL) {
+        let panel = NSSavePanel()
+        panel.title = "Create a Working Copy"
+        panel.message = "EDIT950 will copy and verify every byte before loading the new image. The recent source remains unchanged."
+        panel.prompt = "Create Copy and Load"
+        panel.directoryURL = source.deletingLastPathComponent()
+        let stem = source.deletingPathExtension().lastPathComponent
+        let fileExtension = source.pathExtension.isEmpty ? "img" : source.pathExtension
+        panel.nameFieldStringValue = "\(stem) COPY.\(fileExtension)"
+        panel.allowedContentTypes = [
+            UTType(filenameExtension: fileExtension) ?? .data
+        ]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        guard destination.standardizedFileURL.resolvingSymlinksInPath()
+            != source.standardizedFileURL.resolvingSymlinksInPath()
+        else {
+            reportError(
+                AppError.verificationFailed(
+                    "Choose a different filename so the recent IMG is preserved."
+                )
+            )
+            return
+        }
+        start {
+            self.progress = OperationProgress(
+                kind: .copyingImage,
+                current: 0,
+                total: 2,
+                detail: destination.lastPathComponent
+            )
+            try await Task.detached(priority: .userInitiated) {
+                try ImageFileOperations.copyAtomicallyAndVerify(
+                    source: source,
+                    destination: destination
+                )
+            }.value
+            self.updateProgress(1, detail: "Copy verified; loading image")
+            try await self.openImage(destination, readOnly: false)
+            self.publishSuccess(
+                title: "Verified Copy Loaded",
+                lines: [
+                    destination.path,
+                    "The original recent IMG remains unchanged."
+                ]
+            )
+        }
+    }
+
+    func openInFIND950(_ url: URL) {
+        guard let application = find950ApplicationURL() else {
+            reportError(
+                AppError.companionUnavailable(
+                    "FIND950 is not installed. Install or build FIND950, then try again."
+                )
+            )
+            return
+        }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        start {
+            try await NSWorkspace.shared.open(
+                [url],
+                withApplicationAt: application,
+                configuration: configuration
+            )
+            DistributedNotificationCenter.default().postNotificationName(
+                Notification.Name("com.e45recordings.FIND950.OpenImage"),
+                object: nil,
+                userInfo: ["path": url.path],
+                deliverImmediately: true
+            )
+            self.publishSuccess(
+                title: "Opened in FIND950",
+                lines: [url.lastPathComponent]
+            )
+        }
+    }
+
+    func sendToPLAY950(_ url: URL) {
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.e45recordings.PLAY950.LoadContent"),
+            object: nil,
+            userInfo: ["path": url.path],
+            deliverImmediately: true
+        )
+        // Compatibility post for installed builds carrying the previous product name.
+        DistributedNotificationCenter.default().postNotificationName(
+            Notification.Name("com.e45recordings.TRUE950.LoadContent"),
+            object: nil,
+            userInfo: ["path": url.path],
+            deliverImmediately: true
+        )
+        publishSuccess(
+            title: "Sent to PLAY950",
+            lines: [
+                url.lastPathComponent,
+                "Keep the PLAY950 plug-in window open to receive the IMG."
+            ]
+        )
     }
 
     func handleOpenURLs(_ urls: [URL]) {
@@ -497,6 +678,15 @@ final class AppModel: ObservableObject {
 
     func handleDroppedURLs(_ urls: [URL]) {
         guard let first = urls.first else { return }
+        diagnostics.record(
+            .info,
+            category: "ui",
+            message: "Files dropped on application",
+            fields: [
+                "count": String(urls.count),
+                "first": first.path
+            ]
+        )
         if urls.count == 1,
            first.pathExtension.caseInsensitiveCompare(
                Tools950Interop.requestExtension
@@ -2354,12 +2544,28 @@ final class AppModel: ObservableObject {
 
     func openImage(_ url: URL, readOnly: Bool) async throws {
         let canonicalURL = url.standardizedFileURL.resolvingSymlinksInPath()
+        diagnostics.record(
+            .info,
+            category: "image",
+            message: "Opening IMG",
+            fields: [
+                "image": canonicalURL.path,
+                "readOnly": String(readOnly)
+            ]
+        )
         if let session,
            session.imageURL.standardizedFileURL.resolvingSymlinksInPath() == canonicalURL {
             NSApp.activate(ignoringOtherApps: true)
             return
         }
         guard confirmClosingEditorForImageTransition() else { return }
+        let removableVolume = USBVolumeResolver.owningVolume(for: canonicalURL)
+        let nextVolumeLease = try removableVolume.map {
+            try volumeCoordination.beginUse(
+                of: $0,
+                detail: "IMG open: \(canonicalURL.lastPathComponent)"
+            )
+        }
         progress = OperationProgress(kind: .opening, current: 0, total: 1, detail: url.lastPathComponent)
         headerNotice = nil
         fileInformation = nil
@@ -2369,26 +2575,51 @@ final class AppModel: ObservableObject {
         session = nil
         snapshot = DiskSnapshot()
         selection.removeAll()
-        let result = try await controller.open(
-            imageURL: canonicalURL,
-            executableURL: settings.executableURL,
-            readOnly: readOnly
-        )
+        let result: CommandResult
+        do {
+            result = try await controller.open(
+                imageURL: canonicalURL,
+                executableURL: settings.executableURL,
+                readOnly: readOnly
+            )
+        } catch {
+            nextVolumeLease?.release()
+            throw error
+        }
         appendLog(result)
+        imageVolumeUseLease = nextVolumeLease
         session = ImageSession(
             imageURL: canonicalURL,
             readOnly: readOnly,
-            removableVolumeURL: USBVolumeResolver.owningVolume(for: url),
+            removableVolumeURL: removableVolume,
             openedAt: Date()
         )
         remember(url)
         try await refresh()
         try await rebuildSampleAuditionCache()
         progress = nil
+        diagnostics.record(
+            .info,
+            category: "image",
+            message: "IMG ready",
+            fields: [
+                "image": canonicalURL.path,
+                "volume": snapshot.currentPath,
+                "files": String(snapshot.files.count),
+                "readOnly": String(readOnly)
+            ]
+        )
     }
 
     func closeImage() {
         guard confirmClosingEditorForImageTransition() else { return }
+        let closingImage = session?.imageURL.path ?? "none"
+        diagnostics.record(
+            .info,
+            category: "image",
+            message: "Close IMG requested",
+            fields: ["image": closingImage]
+        )
         start {
             self.discardExternalSampleEditSession()
             self.stopSampleAudition()
@@ -2399,6 +2630,12 @@ final class AppModel: ObservableObject {
             self.selection.removeAll()
             self.headerNotice = nil
             self.fileInformation = nil
+            self.diagnostics.record(
+                .info,
+                category: "image",
+                message: "IMG closed",
+                fields: ["image": closingImage]
+            )
         }
     }
 
@@ -3263,6 +3500,16 @@ final class AppModel: ObservableObject {
         launchEditor: Bool = false
     ) async throws {
         guard let activeSession = session else { throw AppError.noImageOpen }
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Preparing sample editor",
+            fields: [
+                "sample": file.name,
+                "image": activeSession.imageURL.path,
+                "launchExternalEditor": String(launchEditor)
+            ]
+        )
         guard !activeSession.readOnly else { throw AppError.readOnly }
         guard isS900Volume, file.isSample else {
             throw AppError.verificationFailed(
@@ -3348,6 +3595,17 @@ final class AppModel: ObservableObject {
             try await openEditedWAV(editSession)
         }
         externalSampleEditSession = editSession
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Sample editor presented",
+            fields: [
+                "sample": file.name,
+                "session": editSession.id.uuidString,
+                "playbackMode": originalAttributes.playbackMode.title,
+                "sampleLength": String(originalAttributes.sampleLength)
+            ]
+        )
         retained = true
         updateProgress(2, detail: "Ready for editing")
         publishSuccess(
@@ -3367,6 +3625,16 @@ final class AppModel: ObservableObject {
         _ editSession: ExternalSampleEditSession,
         loopPoints: S9LoopPoints? = nil
     ) -> Bool {
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Opening temporary WAV in external editor",
+            fields: [
+                "sample": editSession.sourceFile.name,
+                "session": editSession.id.uuidString,
+                "loopMarkers": String(loopPoints != nil)
+            ]
+        )
         do {
             if let loopPoints {
                 let wavPoints = try Self.wavLoopMarkerOffsets(
@@ -3385,6 +3653,12 @@ final class AppModel: ObservableObject {
             editSession.errorMessage =
                 (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
+            diagnostics.record(
+                .error,
+                category: "sample-edit",
+                message: "Could not update WAV markers before opening editor",
+                fields: ["error": editSession.errorMessage ?? "Unknown error"]
+            )
             return false
         }
         Task {
@@ -3394,6 +3668,12 @@ final class AppModel: ObservableObject {
                 editSession.errorMessage =
                     (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
+                self.diagnostics.record(
+                    .error,
+                    category: "sample-edit",
+                    message: "External audio editor launch failed",
+                    fields: ["error": editSession.errorMessage ?? "Unknown error"]
+                )
             }
         }
         return true
@@ -3401,6 +3681,15 @@ final class AppModel: ObservableObject {
 
     func cancelExternalSampleEdit(_ editSession: ExternalSampleEditSession) {
         guard !editSession.isReplacing else { return }
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Sample editor cancelled",
+            fields: [
+                "sample": editSession.sourceFile.name,
+                "session": editSession.id.uuidString
+            ]
+        )
         if externalSampleEditSession?.id == editSession.id {
             externalSampleEditSession = nil
         }
@@ -3418,8 +3707,24 @@ final class AppModel: ObservableObject {
         createBackup: Bool,
         attributes: S9SampleEditSettings,
         loopPoints: S9LoopPoints? = nil,
-        bandwidthConversion: S950BandwidthConversion? = nil
+        bandwidthConversion: S950BandwidthConversion? = nil,
+        onSuccess: @escaping @MainActor () -> Void = {}
     ) {
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Sample replacement requested",
+            fields: [
+                "sample": editSession.sourceFile.name,
+                "session": editSession.id.uuidString,
+                "backup": String(createBackup),
+                "compressed": String(compressed),
+                "playbackMode": attributes.playbackMode.title,
+                "loopStart": loopPoints.map { String($0.start) } ?? "none",
+                "loopEnd": loopPoints.map { String($0.end) } ?? "none",
+                "bandwidthConversion": String(bandwidthConversion != nil)
+            ]
+        )
         start {
             editSession.isReplacing = true
             editSession.errorMessage = nil
@@ -3436,14 +3741,46 @@ final class AppModel: ObservableObject {
                     loopPoints: loopPoints,
                     bandwidthConversion: bandwidthConversion
                 )
+                editSession.isReplacing = false
+                self.progress = nil
+                await Task.yield()
+                self.diagnostics.record(
+                    .info,
+                    category: "sample-edit",
+                    message: "Replacement verified; dismissing sample editor",
+                    fields: [
+                        "sample": editSession.sourceFile.name,
+                        "session": editSession.id.uuidString
+                    ]
+                )
+                onSuccess()
                 if self.externalSampleEditSession?.id == editSession.id {
                     self.externalSampleEditSession = nil
                 }
                 editSession.removeWorkspace()
+                self.diagnostics.record(
+                    .info,
+                    category: "sample-edit",
+                    message: "Sample editor dismissed and workspace released",
+                    fields: [
+                        "sample": editSession.sourceFile.name,
+                        "session": editSession.id.uuidString
+                    ]
+                )
             } catch {
                 editSession.errorMessage =
                     (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
+                self.diagnostics.record(
+                    .error,
+                    category: "sample-edit",
+                    message: "Sample replacement failed",
+                    fields: [
+                        "sample": editSession.sourceFile.name,
+                        "session": editSession.id.uuidString,
+                        "error": editSession.errorMessage ?? "Unknown error"
+                    ]
+                )
                 if self.settings.autoOpenLogOnError {
                     self.isLogVisible = true
                 }
@@ -4792,6 +5129,13 @@ final class AppModel: ObservableObject {
     }
 
     func createFormattedImage(at url: URL, preset: FormatPreset) async throws {
+        let removableVolume = USBVolumeResolver.owningVolume(for: url)
+        let nextVolumeLease = try removableVolume.map {
+            try volumeCoordination.beginUse(
+                of: $0,
+                detail: "Creating IMG: \(url.lastPathComponent)"
+            )
+        }
         progress = OperationProgress(kind: .formatting, current: 0, total: 3, detail: "Creating \(url.lastPathComponent)")
         await controller.close()
         session = nil
@@ -4800,7 +5144,8 @@ final class AppModel: ObservableObject {
             updateProgress(1, detail: "Formatting \(preset.rawValue)")
             let opened = try await controller.open(imageURL: url, executableURL: settings.executableURL, readOnly: false)
             appendLog(opened)
-            session = ImageSession(imageURL: url, readOnly: false, removableVolumeURL: USBVolumeResolver.owningVolume(for: url), openedAt: Date())
+            imageVolumeUseLease = nextVolumeLease
+            session = ImageSession(imageURL: url, readOnly: false, removableVolumeURL: removableVolume, openedAt: Date())
             _ = try await run(preset.command)
             try await createInitialVolumeIfNeeded(for: preset)
             updateProgress(2, detail: "Verifying filesystem")
@@ -4818,6 +5163,7 @@ final class AppModel: ObservableObject {
             )
             progress = nil
         } catch {
+            nextVolumeLease?.release()
             await controller.close()
             session = nil
             incompleteImageURL = FileManager.default.fileExists(atPath: url.path) ? url : nil
@@ -4893,6 +5239,14 @@ final class AppModel: ObservableObject {
         guard let session, let volume = session.removableVolumeURL else {
             throw AppError.usbVolumeNotFound
         }
+        let ejectLease = try volumeCoordination.beginEject(of: volume)
+        defer { ejectLease.release() }
+        diagnostics.record(
+            .info,
+            category: "safe-eject",
+            message: "Cross-app volume interlock acquired",
+            fields: ["volume": volume.path]
+        )
         guard let cleanupPlan = try await prepareCleanupPlan(for: volume) else {
             return
         }
@@ -4996,7 +5350,16 @@ final class AppModel: ObservableObject {
             let detail = result.failures.prefix(20).map {
                 "\($0.relativePath): \($0.message)"
             }.joined(separator: "\n")
-            diagnosticLog += "[\(Date.formattedLogTime)] Safe Eject stopped after \(result.failures.count) cleanup failure(s) on \(volume.lastPathComponent):\n\(detail)\n\n"
+            diagnostics.record(
+                .error,
+                category: "safe-eject",
+                message: "Cleanup failed; eject stopped",
+                fields: [
+                    "volume": volume.lastPathComponent,
+                    "failures": String(result.failures.count),
+                    "detail": detail
+                ]
+            )
             throw AppError.verificationFailed(
                 cleanupFailureMessage(
                     volume: volume,
@@ -5014,7 +5377,16 @@ final class AppModel: ObservableObject {
         guard remaining.isEmpty else {
             let detail = remaining.prefix(20).map(\.relativePath)
                 .joined(separator: "\n")
-            diagnosticLog += "[\(Date.formattedLogTime)] Safe Eject verification found \(remaining.count) remaining metadata item(s) on \(volume.lastPathComponent):\n\(detail)\n\n"
+            diagnostics.record(
+                .error,
+                category: "safe-eject",
+                message: "Cleanup verification failed; eject stopped",
+                fields: [
+                    "volume": volume.lastPathComponent,
+                    "remaining": String(remaining.count),
+                    "detail": detail
+                ]
+            )
             throw AppError.verificationFailed(
                 cleanupFailureMessage(
                     volume: volume,
@@ -5060,6 +5432,18 @@ final class AppModel: ObservableObject {
         guard let session, !session.isRemovable else { throw AppError.usbVolumeNotFound }
         let destinationVolume = USBVolumeResolver.owningVolume(for: destination)
         guard let destinationVolume else { throw AppError.usbVolumeNotFound }
+        let ejectLease = settings.ejectAfterUSBCopy
+            ? try volumeCoordination.beginEject(of: destinationVolume) : nil
+        let copyLease = settings.ejectAfterUSBCopy
+            ? nil
+            : try volumeCoordination.beginUse(
+                of: destinationVolume,
+                detail: "Copying IMG: \(destination.lastPathComponent)"
+            )
+        defer {
+            ejectLease?.release()
+            copyLease?.release()
+        }
         let totalSteps = settings.ejectAfterUSBCopy ? 4 : 3
         progress = OperationProgress(
             kind: .copying,
@@ -5502,7 +5886,12 @@ final class AppModel: ObservableObject {
             do {
                 try ImageFileOperations.updateModificationDate(of: imageURL)
             } catch {
-                diagnosticLog += "[\(Date.formattedLogTime)] ! Could not update IMG modification date: \(error.localizedDescription)\n\n"
+                diagnostics.record(
+                    .warning,
+                    category: "image",
+                    message: "Could not update IMG modification date",
+                    fields: ["error": error.localizedDescription]
+                )
             }
         }
         return result
@@ -5613,8 +6002,15 @@ final class AppModel: ObservableObject {
     }
 
     private func appendLog(_ result: CommandResult) {
-        let stamp = Date.formattedLogTime
-        diagnosticLog += "[\(stamp)] › \(result.command)\n\(result.cleanedOutput)\n\n"
+        diagnostics.record(
+            .debug,
+            category: "akaiutil",
+            message: "Helper command completed",
+            fields: [
+                "command": result.command,
+                "output": result.cleanedOutput
+            ]
+        )
     }
 
     private func updateProgress(_ current: Int, detail: String) {
@@ -6266,6 +6662,12 @@ final class AppModel: ObservableObject {
 
     private func reportError(_ error: Error) {
         let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        diagnostics.record(
+            .error,
+            category: "operation",
+            message: "Operation failed",
+            fields: ["error": message]
+        )
         headerNotice = nil
         report = OperationReport(title: "EDIT950", lines: [message], isError: true)
         if settings.autoOpenLogOnError { isLogVisible = true }
@@ -6281,6 +6683,12 @@ final class AppModel: ObservableObject {
         systemImage: String = "checkmark.circle.fill"
     ) {
         let meaningfulLines = lines.filter { !$0.isEmpty }
+        diagnostics.record(
+            .info,
+            category: "operation",
+            message: title,
+            fields: ["detail": meaningfulLines.joined(separator: " | ")]
+        )
         let visibleLines = meaningfulLines.prefix(2)
         var detail = visibleLines.joined(separator: " • ")
         if meaningfulLines.count > visibleLines.count {
@@ -6360,6 +6768,27 @@ final class AppModel: ObservableObject {
             .filter { FileManager.default.fileExists(atPath: $0.path) }
     }
 
+    private func find950ApplicationURL() -> URL? {
+        if let installed = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.e45recordings.FIND950"
+        ) {
+            return installed
+        }
+        let bundleDirectory = Bundle.main.bundleURL.deletingLastPathComponent()
+        let suiteDirectory = bundleDirectory
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/FIND950.app"),
+            bundleDirectory.appendingPathComponent("FIND950.app"),
+            suiteDirectory.appendingPathComponent("Build/FIND950.app"),
+            suiteDirectory.appendingPathComponent("FIND950/Build/FIND950.app")
+        ]
+        return candidates.first {
+            FileManager.default.fileExists(atPath: $0.path)
+        }
+    }
+
     private func isWAV(_ url: URL) -> Bool {
         url.pathExtension.caseInsensitiveCompare("wav") == .orderedSame
     }
@@ -6372,6 +6801,13 @@ final class AppModel: ObservableObject {
     private func isImportableAudioOrAkaiFile(_ url: URL) -> Bool {
         isWAV(url) || isNativeAkaiURL(url)
     }
+
+    private static func diagnosticFileStamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
+    }
 }
 
 private extension Optional where Wrapped == String {
@@ -6381,13 +6817,5 @@ private extension Optional where Wrapped == String {
 private extension String {
     var pathExtensionUppercased: String {
         (self as NSString).pathExtension.uppercased()
-    }
-}
-
-private extension Date {
-    static var formattedLogTime: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: Date())
     }
 }

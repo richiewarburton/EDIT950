@@ -95,6 +95,18 @@ struct SettingsView: View {
                     )
                     Toggle("Open diagnostic log when an error occurs", isOn: $settings.autoOpenLogOnError)
                 }
+                Section("Diagnostics") {
+                    Text(
+                        "EDIT950 continuously keeps a size-limited, user-readable activity timeline. It records actions, dialogue state, operation results and errors—not IMG, program, sample or audio contents. Home and temporary paths are shortened."
+                    )
+                    .font(SuiteFont.regular(10))
+                    .foregroundStyle(Color.suiteUnit)
+                    HStack {
+                        Button("Show Live Log") { model.isLogVisible = true }
+                        Button("Save Copy…") { model.saveDiagnosticLog() }
+                        Button("Reveal in Finder") { model.revealDiagnosticLog() }
+                    }
+                }
                 Section("Safe Eject") {
                     Toggle("Clean and eject after a verified USB copy", isOn: $settings.ejectAfterUSBCopy)
                     Text("EDIT950 removes only the enabled metadata rules, including AppleDouble ._* sidecars, verifies none remain, then asks macOS to safely unmount and eject the volume. Every cleanup is previewed first. Full Disk Access is required to remove protected .Spotlight-V100 data.")

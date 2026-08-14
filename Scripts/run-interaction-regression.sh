@@ -34,6 +34,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/P9EditorView.swift \
   Sources/EDIT950/FocusedProgramExport.swift \
   Sources/EDIT950/CollectionExport.swift \
+  Sources/EDIT950/DiagnosticLogStore.swift \
+  Sources/EDIT950/VolumeCoordination.swift \
   Sources/EDIT950/AppModel.swift \
   Sources/EDIT950/TagViews.swift \
   Sources/EDIT950/TableSelectionColor.swift \

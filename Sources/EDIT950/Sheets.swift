@@ -10,10 +10,12 @@ final class SampleLoopAuditionController: ObservableObject {
 
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
-    private var playerAttached = false
+    private let varispeed = AVAudioUnitVarispeed()
+    private var playbackNodesAttached = false
     private var activeBuffer: AVAudioPCMBuffer?
     private var activeMode: S9PlaybackMode = .oneShot
     private var activeDirection: S9PlaybackDirection = .normal
+    private var activeSemitoneOffset = 0
     private var playbackGeneration = UUID()
     var onPlaybackEnded: (() -> Void)?
 
@@ -32,7 +34,8 @@ final class SampleLoopAuditionController: ObservableObject {
         mode: S9PlaybackMode,
         direction: S9PlaybackDirection,
         start: Int,
-        end: Int
+        end: Int,
+        semitoneOffset: Int = 0
     ) {
         if isPlaying {
             stop()
@@ -42,7 +45,8 @@ final class SampleLoopAuditionController: ObservableObject {
                 mode: mode,
                 direction: direction,
                 start: start,
-                end: end
+                end: end,
+                semitoneOffset: semitoneOffset
             )
         }
     }
@@ -63,7 +67,8 @@ final class SampleLoopAuditionController: ObservableObject {
         mode: S9PlaybackMode,
         direction: S9PlaybackDirection,
         start: Int,
-        end: Int
+        end: Int,
+        semitoneOffset: Int? = nil
     ) {
         guard isPlaying else { return }
         play(
@@ -71,7 +76,8 @@ final class SampleLoopAuditionController: ObservableObject {
             mode: mode,
             direction: direction,
             start: start,
-            end: end
+            end: end,
+            semitoneOffset: semitoneOffset ?? activeSemitoneOffset
         )
     }
 
@@ -108,7 +114,8 @@ final class SampleLoopAuditionController: ObservableObject {
         mode: S9PlaybackMode,
         direction: S9PlaybackDirection,
         start: Int,
-        end: Int
+        end: Int,
+        semitoneOffset: Int = 0
     ) {
         do {
             let file = try AVAudioFile(forReading: url)
@@ -152,10 +159,14 @@ final class SampleLoopAuditionController: ObservableObject {
                 playable = forward
             }
 
-            try preparePlayback(format: playable.format)
+            try preparePlayback(
+                format: playable.format,
+                semitoneOffset: semitoneOffset
+            )
             activeBuffer = playable
             activeMode = mode
             activeDirection = direction
+            activeSemitoneOffset = semitoneOffset
             playbackGeneration = UUID()
             let generation = playbackGeneration
             errorMessage = nil
@@ -194,16 +205,23 @@ final class SampleLoopAuditionController: ObservableObject {
         isPlaying = false
     }
 
-    private func preparePlayback(format: AVAudioFormat) throws {
+    private func preparePlayback(
+        format: AVAudioFormat,
+        semitoneOffset: Int
+    ) throws {
         player.stop()
         engine.stop()
-        if playerAttached {
+        if playbackNodesAttached {
             engine.disconnectNodeOutput(player)
+            engine.disconnectNodeOutput(varispeed)
         } else {
             engine.attach(player)
-            playerAttached = true
+            engine.attach(varispeed)
+            playbackNodesAttached = true
         }
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        varispeed.rate = Float(pow(2.0, Double(semitoneOffset) / 12.0))
+        engine.connect(player, to: varispeed, format: format)
+        engine.connect(varispeed, to: engine.mainMixerNode, format: format)
         engine.prepare()
         try engine.start()
     }
@@ -563,6 +581,7 @@ struct ImportOptionsSheet: View {
 }
 
 struct ExternalSampleEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
     @ObservedObject var editSession: ExternalSampleEditSession
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var settings: AppSettings
@@ -580,6 +599,10 @@ struct ExternalSampleEditSheet: View {
     @State private var convertedPreviewURL: URL?
     @State private var isPreparingPreview = false
     @State private var previewError: String?
+    @State private var keyboardVisible = true
+    @State private var keyboardBaseNote: Int
+    @State private var selectedAuditionNote: Int
+    @State private var keyboardBehavior: SampleKeyboardBehavior = .selectForSpace
     @StateObject private var audition = SampleLoopAuditionController()
 
     init(editSession: ExternalSampleEditSession) {
@@ -601,6 +624,11 @@ struct ExternalSampleEditSheet: View {
         _bandwidth = State(initialValue: S950BandwidthConversion.bandwidth(
             forSampleRate: Int(editSession.originalInspection.sampleRate.rounded())
         ))
+        let rootNote = Int(attributes.rootNote)
+        _selectedAuditionNote = State(initialValue: rootNote)
+        _keyboardBaseNote = State(
+            initialValue: Self.keyboardBase(near: rootNote)
+        )
     }
 
     var body: some View {
@@ -617,305 +645,326 @@ struct ExternalSampleEditSheet: View {
                 }
             }
 
-            GroupBox("Round-trip WAV") {
-                VStack(alignment: .leading, spacing: 9) {
-                    LabeledContent("Temporary file") {
-                        Text(editSession.wavURL.lastPathComponent)
-                            .font(SuiteFont.regular(11))
-                    }
-                    LabeledContent(
-                        "Exported format",
-                        value:
-                            "\(Int(editSession.originalInspection.sampleRate)) Hz · "
-                            + "\(editSession.originalInspection.bitDepth)-bit · "
-                            + "\(editSession.originalInspection.channelCount) channel"
-                            + "\(editSession.originalInspection.channelCount == 1 ? "" : "s")"
-                    )
-                    Text(
-                        editSession.editorURL == nil
-                            ? "Native attributes can be changed without an audio editor. Configure one in Settings only if audio editing is required."
-                            : "Open the WAV below only when audio editing is required. Save over it; do not use Save As or change its location."
-                    )
-                    .font(SuiteFont.regular(10))
-                    .foregroundStyle(Color.suiteUnit)
-                    HStack {
-                        Button(
-                            "Open WAV in "
-                                + (editSession.editorURL?
-                                    .deletingPathExtension().lastPathComponent
-                                    ?? "Audio Editor")
-                        ) {
-                            openWAVInEditor()
-                        }
-                        .buttonStyle(SuiteSecondaryButtonStyle())
-                        .disabled(
-                            editSession.editorURL == nil
-                                || loopValidationError != nil
-                        )
-                        Button("Show WAV in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting(
-                                [editSession.wavURL]
-                            )
-                        }
-                        .buttonStyle(SuiteSecondaryButtonStyle())
-                    }
-                }
-                .padding(7)
-            }
-
-            GroupBox("Return to the S950 IMG") {
-                VStack(alignment: .leading, spacing: 9) {
-                    Picker("Root pitch", selection: $editAttributes.rootNote) {
-                        ForEach(0..<128, id: \.self) { note in
-                            Text("\(P9Keygroup.noteName(note)) · MIDI \(note)")
-                                .tag(note)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .padding(.horizontal, 8)
-                    .frame(minHeight: 34)
-                    .background(Color.suiteSlab)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.suiteRule2)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-
-                    Picker(
-                        "Playback direction",
-                        selection: $editAttributes.playbackDirection
-                    ) {
-                        ForEach(S9PlaybackDirection.allCases) { direction in
-                            Text(direction.title).tag(direction)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(Color.suiteBlue)
-
-                    Divider()
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("S950 SAMPLING BANDWIDTH")
-                            .font(SuiteFont.medium(11))
-                            .tracking(1.3)
-                        HStack {
-                            Slider(value: bandwidthDouble, in: 3_000...19_200, step: 100)
-                                .tint(Color.suiteBlue)
-                            bandwidthInput
-                            Text("HZ BANDWIDTH")
-                                .font(SuiteFont.regular(9))
-                                .tracking(1.0)
-                                .foregroundStyle(Color.suiteUnit)
-                        }
-                        Picker("Resampling character", selection: $resamplingMode) {
-                            ForEach(S950ResamplingMode.allCases) { mode in Text(mode.title).tag(mode) }
-                        }
-                        .pickerStyle(.segmented)
-                        .tint(Color.suiteBlue)
-                        HStack(spacing: 18) {
-                            LabeledContent("Actual sample rate", value: "\(bandwidthConversion.sampleRate.formatted()) samples/sec")
-                            LabeledContent("Estimated memory saving", value: estimatedSaving.formatted(.percent.precision(.fractionLength(1))))
-                        }
-                        LabeledContent("Estimated IMG after replacement", value: "\(projectedUsed.formattedByteCount) used · \(projectedFree.formattedByteCount) free")
-                        if isPreparingPreview {
-                            Label("PREPARING CURRENT AUDITION PREVIEW…", systemImage: "waveform")
-                                .font(SuiteFont.regular(10))
-                                .foregroundStyle(Color.suiteUnit)
-                        }
-                        Text(resamplingMode == .antiAliased
-                             ? "Clean mode removes frequencies that cannot survive the lower rate before conversion."
-                             : "Raw mode applies no protective low-pass filter, intentionally allowing S950-style aliasing and grit.")
-                            .font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit)
-                        if let previewError { Text(previewError).font(SuiteFont.regular(10)).foregroundStyle(Color.suiteRed) }
-                    }
-                    .padding(12)
-                    .background(Color.suiteSlab)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 7)
-                            .stroke(Color.suiteRule2)
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 7))
-
-                    Picker(
-                        "Playback mode",
-                        selection: $editAttributes.playbackMode
-                    ) {
-                        ForEach(S9PlaybackMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .tint(Color.suiteBlue)
-
-                    HStack(spacing: 18) {
-                        LabeledContent(
-                            "Sample length",
-                            value: "\(editSession.originalAttributes.sampleLength.formatted()) samples"
-                        )
-                        Divider()
-                        LabeledContent(
-                            "Loop length",
-                            value: "\(loopLength.formatted()) samples"
-                        )
-                    }
-
-                    HStack {
-                        Text("Loop start")
-                        Spacer()
-                        zeroCrossingControls(
-                            position: loopStart,
-                            previous: previousLoopStartCrossing,
-                            next: nextLoopStartCrossing,
-                            move: { loopStartBinding.wrappedValue = $0.frame }
-                        )
-                        TextField(
-                            "Loop start",
-                            value: loopStartBinding,
-                            format: .number
-                        )
-                        .multilineTextAlignment(.trailing)
-                        .font(SuiteFont.regular(11))
-                        .frame(width: 130)
-                        Stepper(
-                            "Loop start",
-                            value: loopStartBinding,
-                            in: 0...Int(editSession.originalAttributes.sampleLength)
-                        )
-                        .labelsHidden()
-                    }
-
-                    HStack {
-                        Text("Loop end")
-                        Spacer()
-                        zeroCrossingControls(
-                            position: loopEnd,
-                            previous: previousLoopEndCrossing,
-                            next: nextLoopEndCrossing,
-                            move: { loopEndBinding.wrappedValue = $0.frame }
-                        )
-                        TextField(
-                            "Loop end",
-                            value: loopEndBinding,
-                            format: .number
-                        )
-                        .multilineTextAlignment(.trailing)
-                        .font(SuiteFont.regular(11))
-                        .frame(width: 130)
-                        Stepper(
-                            "Loop end",
-                            value: loopEndBinding,
-                            in: 0...Int(editSession.originalAttributes.sampleLength)
-                        )
-                        .labelsHidden()
-                    }
-
-                    if let loopValidationError {
-                        Label(
-                            loopValidationError,
-                            systemImage: "exclamationmark.triangle.fill"
-                        )
-                        .font(SuiteFont.regular(10))
-                        .foregroundStyle(Color.suiteRed)
-                    }
-
-                    VStack(alignment: .leading, spacing: 7) {
-                        Label(
-                            "After saving marker changes in the external editor, return here and click Refresh Loop Points from Saved WAV to update the values shown above. Replacement reads saved markers automatically; refreshing lets you verify them first.",
-                            systemImage: "arrow.clockwise.circle.fill"
-                        )
-                        .font(SuiteFont.regular(10))
-                        .foregroundStyle(Color.suiteAmber)
-                        HStack {
-                            Button("Refresh Loop Points from Saved WAV") {
-                                checkSavedMarkers()
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 18) {
+                    GroupBox("Round-trip WAV") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            LabeledContent("Temporary file") {
+                                Text(editSession.wavURL.lastPathComponent)
+                                    .font(SuiteFont.regular(11))
                             }
-                            .buttonStyle(SuiteSecondaryButtonStyle())
-                            Button {
-                                toggleCurrentAudition()
-                            } label: {
-                                Label(
-                                    audition.isPlaying
-                                        ? "Stop Audition"
-                                        : "Audition Current Settings",
-                                    systemImage: audition.isPlaying
-                                        ? "stop.fill" : "play.fill"
+                            LabeledContent(
+                                "Exported format",
+                                value:
+                                    "\(Int(editSession.originalInspection.sampleRate)) Hz · "
+                                    + "\(editSession.originalInspection.bitDepth)-bit · "
+                                    + "\(editSession.originalInspection.channelCount) channel"
+                                    + "\(editSession.originalInspection.channelCount == 1 ? "" : "s")"
+                            )
+                            Text(
+                                editSession.editorURL == nil
+                                    ? "Native attributes can be changed without an audio editor. Configure one in Settings only if audio editing is required."
+                                    : "Open the WAV below only when audio editing is required. Save over it; do not use Save As or change its location."
+                            )
+                            .font(SuiteFont.regular(10))
+                            .foregroundStyle(Color.suiteUnit)
+                            HStack {
+                                Button(
+                                    "Open WAV in "
+                                        + (editSession.editorURL?
+                                            .deletingPathExtension().lastPathComponent
+                                            ?? "Audio Editor")
+                                ) {
+                                    openWAVInEditor()
+                                }
+                                .buttonStyle(SuiteSecondaryButtonStyle())
+                                .disabled(
+                                    editSession.editorURL == nil
+                                        || loopValidationError != nil
+                                )
+                                Button("Show WAV in Finder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting(
+                                        [editSession.wavURL]
+                                    )
+                                }
+                                .buttonStyle(SuiteSecondaryButtonStyle())
+                            }
+                        }
+                        .padding(7)
+                    }
+
+                    GroupBox("Return to the S950 IMG") {
+                        VStack(alignment: .leading, spacing: 9) {
+                            Picker("Root pitch", selection: $editAttributes.rootNote) {
+                                ForEach(0..<128, id: \.self) { note in
+                                    Text("\(P9Keygroup.noteName(note)) · MIDI \(note)")
+                                        .tag(note)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .padding(.horizontal, 8)
+                            .frame(minHeight: 34)
+                            .background(Color.suiteSlab)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.suiteRule2)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+                            samplePitchKeyboard
+
+                            EditorSegmentedPicker(
+                                title: "Playback direction",
+                                options: S9PlaybackDirection.allCases,
+                                selection: $editAttributes.playbackDirection,
+                                segmentMinWidth: 76,
+                                label: \.title
+                            )
+
+                            Divider()
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("S950 SAMPLING BANDWIDTH")
+                                    .font(SuiteFont.medium(11))
+                                    .tracking(1.3)
+                                HStack {
+                                    Slider(value: bandwidthDouble, in: 3_000...19_200, step: 100)
+                                        .tint(Color.suiteBlue)
+                                    bandwidthInput
+                                    Text("HZ BANDWIDTH")
+                                        .font(SuiteFont.regular(9))
+                                        .tracking(1.0)
+                                        .foregroundStyle(Color.suiteUnit)
+                                }
+                                EditorSegmentedPicker(
+                                    title: "Resampling character",
+                                    options: S950ResamplingMode.allCases,
+                                    selection: $resamplingMode,
+                                    segmentMinWidth: 145,
+                                    label: \.title
+                                )
+                                HStack(spacing: 18) {
+                                    LabeledContent("Actual sample rate", value: "\(bandwidthConversion.sampleRate.formatted()) samples/sec")
+                                    LabeledContent("Estimated memory saving", value: estimatedSaving.formatted(.percent.precision(.fractionLength(1))))
+                                }
+                                LabeledContent("Estimated IMG after replacement", value: "\(projectedUsed.formattedByteCount) used · \(projectedFree.formattedByteCount) free")
+                                if isPreparingPreview {
+                                    Label("PREPARING CURRENT AUDITION PREVIEW…", systemImage: "waveform")
+                                        .font(SuiteFont.regular(10))
+                                        .foregroundStyle(Color.suiteUnit)
+                                }
+                                Text(resamplingMode == .antiAliased
+                                     ? "Clean mode removes frequencies that cannot survive the lower rate before conversion."
+                                     : "Raw mode applies no protective low-pass filter, intentionally allowing S950-style aliasing and grit.")
+                                    .font(SuiteFont.regular(10)).foregroundStyle(Color.suiteUnit)
+                                if let previewError { Text(previewError).font(SuiteFont.regular(10)).foregroundStyle(Color.suiteRed) }
+                            }
+                            .padding(12)
+                            .background(Color.suiteSlab)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 7)
+                                    .stroke(Color.suiteRule2)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                            EditorSegmentedPicker(
+                                title: "Playback mode",
+                                options: S9PlaybackMode.allCases,
+                                selection: $editAttributes.playbackMode,
+                                segmentMinWidth: 96,
+                                label: \.title
+                            )
+
+                            HStack(spacing: 18) {
+                                LabeledContent(
+                                    "Sample length",
+                                    value: "\(editSession.originalAttributes.sampleLength.formatted()) samples"
+                                )
+                                Divider()
+                                LabeledContent(
+                                    "Loop length",
+                                    value: "\(loopLength.formatted()) samples"
                                 )
                             }
-                            .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
-                            .disabled(
-                                editSession.isReplacing
-                                    || isPreparingPreview
-                                    || (editAttributes.playbackMode.requiresLoopMarkers
-                                        && loopValidationError != nil)
-                            )
-                            if let markerSummary {
-                                Text(markerSummary)
-                                    .font(SuiteFont.regular(10)).monospacedDigit()
-                                    .foregroundStyle(Color.suiteUnit)
+
+                            HStack {
+                                Text("Loop start")
+                                Spacer()
+                                zeroCrossingControls(
+                                    position: loopStart,
+                                    previous: previousLoopStartCrossing,
+                                    next: nextLoopStartCrossing,
+                                    move: { loopStartBinding.wrappedValue = $0.frame }
+                                )
+                                TextField(
+                                    "Loop start",
+                                    value: loopStartBinding,
+                                    format: .number
+                                )
+                                .multilineTextAlignment(.trailing)
+                                .font(SuiteFont.regular(11))
+                                .frame(width: 130)
+                                Stepper(
+                                    "Loop start",
+                                    value: loopStartBinding,
+                                    in: 0...Int(editSession.originalAttributes.sampleLength)
+                                )
+                                .labelsHidden()
                             }
+
+                            HStack {
+                                Text("Loop end")
+                                Spacer()
+                                zeroCrossingControls(
+                                    position: loopEnd,
+                                    previous: previousLoopEndCrossing,
+                                    next: nextLoopEndCrossing,
+                                    move: { loopEndBinding.wrappedValue = $0.frame }
+                                )
+                                TextField(
+                                    "Loop end",
+                                    value: loopEndBinding,
+                                    format: .number
+                                )
+                                .multilineTextAlignment(.trailing)
+                                .font(SuiteFont.regular(11))
+                                .frame(width: 130)
+                                Stepper(
+                                    "Loop end",
+                                    value: loopEndBinding,
+                                    in: 0...Int(editSession.originalAttributes.sampleLength)
+                                )
+                                .labelsHidden()
+                            }
+
+                            if let loopValidationError {
+                                Label(
+                                    loopValidationError,
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(SuiteFont.regular(10))
+                                .foregroundStyle(Color.suiteRed)
+                            }
+
+                            VStack(alignment: .leading, spacing: 7) {
+                                Label(
+                                    "After saving marker changes in the external editor, return here and click Refresh Loop Points from Saved WAV to update the values shown above. Replacement reads saved markers automatically; refreshing lets you verify them first.",
+                                    systemImage: "arrow.clockwise.circle.fill"
+                                )
+                                .font(SuiteFont.regular(10))
+                                .foregroundStyle(Color.suiteAmber)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                HStack {
+                                    Button("Refresh Loop Points from Saved WAV") {
+                                        checkSavedMarkers()
+                                    }
+                                    .buttonStyle(SuiteSecondaryButtonStyle())
+                                    Button {
+                                        toggleCurrentAudition()
+                                    } label: {
+                                        Label(
+                                            audition.isPlaying
+                                                ? "Stop Audition · Space"
+                                                : "Audition \(P9Keygroup.noteName(selectedAuditionNote)) · Space",
+                                            systemImage: audition.isPlaying
+                                                ? "stop.fill" : "play.fill"
+                                        )
+                                    }
+                                    .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                                    .help("Press Space to start or stop this audition")
+                                    .disabled(
+                                        editSession.isReplacing
+                                            || isPreparingPreview
+                                            || (editAttributes.playbackMode.requiresLoopMarkers
+                                                && loopValidationError != nil)
+                                    )
+                                    if let markerSummary {
+                                        Text(markerSummary)
+                                            .font(SuiteFont.regular(10)).monospacedDigit()
+                                            .foregroundStyle(Color.suiteUnit)
+                                    }
+                                }
+                                Text(
+                                    "Space starts or stops audition at the selected keyboard note. Audition follows the selected direction and one-shot, loop or alternating-loop mode. Active playback updates immediately when pitch or either loop point changes."
+                                )
+                                .font(SuiteFont.regular(10))
+                                .foregroundStyle(Color.suiteUnit)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+
+                            Divider()
+                            Toggle("Create compressed S950 sample", isOn: $compressed)
+                            Toggle(
+                                "Create and verify a complete IMG backup first",
+                                isOn: $createBackup
+                            )
+                            Text(
+                                "The replacement keeps the original sample name, so P9 references remain valid. "
+                                    + "The stored S9 is re-exported and compared byte-for-byte. "
+                                    + (createBackup
+                                        ? "If replacement or verification fails, the IMG backup is restored automatically."
+                                        : "Without a backup, automatic rollback is unavailable.")
+                            )
+                            .font(SuiteFont.regular(10))
+                            .foregroundStyle(
+                                createBackup ? Color.suiteUnit : Color.suiteAmber
+                            )
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(Color.suiteSlab2)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color.suiteRule2)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
-                        Text(
-                            "Audition follows the selected direction and one-shot, loop or alternating-loop mode. Active loop playback updates immediately when either loop point changes."
-                        )
-                        .font(SuiteFont.regular(10))
-                        .foregroundStyle(Color.suiteUnit)
+                        .padding(7)
                     }
 
-                    Divider()
-                    Toggle("Create compressed S950 sample", isOn: $compressed)
-                    Toggle(
-                        "Create and verify a complete IMG backup first",
-                        isOn: $createBackup
-                    )
-                    Text(
-                        "The replacement keeps the original sample name, so P9 references remain valid. "
-                            + "The stored S9 is re-exported and compared byte-for-byte. "
-                            + (createBackup
-                                ? "If replacement or verification fails, the IMG backup is restored automatically."
-                                : "Without a backup, automatic rollback is unavailable.")
-                    )
-                    .font(SuiteFont.regular(10))
-                    .foregroundStyle(
-                        createBackup ? Color.suiteUnit : Color.suiteAmber
-                    )
+                    if editSession.isReplacing {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(model.progress?.detail ?? "Preparing replacement…")
+                                .foregroundStyle(Color.suiteUnit)
+                                .lineLimit(1)
+                        }
+                    }
+                    if let errorMessage = editSession.errorMessage {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Color.suiteRed)
+                            .font(SuiteFont.regular(11))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let auditionError = audition.errorMessage {
+                        Label(
+                            auditionError,
+                            systemImage: "speaker.slash.fill"
+                        )
+                        .foregroundStyle(Color.suiteRed)
+                        .font(SuiteFont.regular(11))
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let zeroCrossingError {
+                        Label(
+                            zeroCrossingError,
+                            systemImage: "waveform.path.ecg.rectangle"
+                        )
+                        .foregroundStyle(Color.suiteRed)
+                        .font(SuiteFont.regular(11))
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                .padding(7)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(maxWidth: .infinity)
+            .layoutPriority(1)
 
-            if editSession.isReplacing {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(model.progress?.detail ?? "Preparing replacement…")
-                        .foregroundStyle(Color.suiteUnit)
-                        .lineLimit(1)
-                }
-            }
-            if let errorMessage = editSession.errorMessage {
-                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Color.suiteRed)
-                    .font(SuiteFont.regular(11))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let auditionError = audition.errorMessage {
-                Label(
-                    auditionError,
-                    systemImage: "speaker.slash.fill"
-                )
-                .foregroundStyle(Color.suiteRed)
-                .font(SuiteFont.regular(11))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let zeroCrossingError {
-                Label(
-                    zeroCrossingError,
-                    systemImage: "waveform.path.ecg.rectangle"
-                )
-                .foregroundStyle(Color.suiteRed)
-                .font(SuiteFont.regular(11))
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Spacer()
             HStack {
                 Text("The source IMG remains unchanged until the final replacement step.")
                     .font(SuiteFont.regular(10))
@@ -941,7 +990,8 @@ struct ExternalSampleEditSheet: View {
                         attributes: editAttributes,
                         loopPoints: loopPointsManuallyEdited
                             ? currentLoopPoints : nil,
-                        bandwidthConversion: rateIsChanged ? bandwidthConversion : nil
+                        bandwidthConversion: rateIsChanged ? bandwidthConversion : nil,
+                        onSuccess: { dismiss() }
                     )
                 }
                 .keyboardShortcut(.defaultAction)
@@ -953,6 +1003,17 @@ struct ExternalSampleEditSheet: View {
         }
         .padding(22)
         .frame(width: 760, height: 900)
+        .background {
+            SampleEditorSpaceKeyMonitor {
+                guard !editSession.isReplacing,
+                      !isPreparingPreview,
+                      (!editAttributes.playbackMode.requiresLoopMarkers
+                        || loopValidationError == nil)
+                else { return false }
+                toggleCurrentAudition()
+                return true
+            }
+        }
         .interactiveDismissDisabled(editSession.isReplacing)
         .onAppear {
             compressed = settings.compressedS900
@@ -967,9 +1028,157 @@ struct ExternalSampleEditSheet: View {
         .onChange(of: editAttributes.playbackDirection) { _, _ in
             refreshAuditionIfPossible()
         }
+        .onChange(of: editAttributes.rootNote) { oldValue, newValue in
+            if selectedAuditionNote == Int(oldValue) {
+                selectedAuditionNote = Int(newValue)
+            }
+            keyboardBaseNote = Self.keyboardBase(near: Int(newValue))
+            refreshAuditionIfPossible()
+        }
         .onChange(of: bandwidth) { _, _ in invalidateConvertedPreview() }
         .onChange(of: resamplingMode) { _, _ in invalidateConvertedPreview() }
         .onDisappear { audition.stop() }
+    }
+
+    private var samplePitchKeyboard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                        keyboardVisible.toggle()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(
+                            systemName: keyboardVisible
+                                ? "chevron.down" : "chevron.right"
+                        )
+                        .frame(width: 16)
+                        Text("PITCH KEYBOARD")
+                            .font(SuiteFont.medium(10))
+                            .tracking(1.2)
+                    }
+                    .frame(minHeight: 30)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(keyboardVisible ? "Hide pitch keyboard" : "Show pitch keyboard")
+
+                Spacer()
+
+                Text("ROOT \(P9Keygroup.noteName(editAttributes.rootNote))")
+                    .font(SuiteFont.medium(9))
+                    .tracking(0.8)
+                    .foregroundStyle(Color.suiteBlue)
+
+                Button {
+                    keyboardBaseNote = max(0, keyboardBaseNote - 12)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.down")
+                        Text("OCT −")
+                            .font(SuiteFont.medium(8))
+                            .tracking(0.5)
+                    }
+                        .frame(width: 58, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SuiteKeyboardControlButtonStyle())
+                .disabled(keyboardBaseNote == 0)
+                .help("Keyboard down one octave")
+
+                Text(keyboardRangeTitle)
+                    .font(SuiteFont.regular(9))
+                    .monospacedDigit()
+                    .frame(minWidth: 72)
+
+                Button {
+                    keyboardBaseNote = min(96, keyboardBaseNote + 12)
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("OCT +")
+                            .font(SuiteFont.medium(8))
+                            .tracking(0.5)
+                        Image(systemName: "chevron.up")
+                    }
+                        .frame(width: 58, height: 28)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(SuiteKeyboardControlButtonStyle())
+                .disabled(keyboardBaseNote == 96)
+                .help("Keyboard up one octave")
+            }
+
+            if keyboardVisible {
+                EditorSegmentedPicker(
+                    title: "Keyboard action",
+                    options: SampleKeyboardBehavior.allCases,
+                    selection: $keyboardBehavior,
+                    segmentMinWidth: 150,
+                    label: \.title
+                )
+
+                TwoOctaveSampleKeyboard(
+                    baseNote: keyboardBaseNote,
+                    rootNote: editAttributes.rootNote,
+                    selectedNote: selectedAuditionNote,
+                    noteAction: handleKeyboardNote
+                )
+
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.suiteBlue)
+                        .frame(width: 9, height: 9)
+                    Text("BLUE = ROOT")
+                    Circle()
+                        .fill(Color.suiteYellow)
+                        .frame(width: 9, height: 9)
+                    Text("YELLOW OUTLINE = SPACE NOTE")
+                    Spacer()
+                    Text(
+                        "SPACE: \(P9Keygroup.noteName(selectedAuditionNote))"
+                    )
+                    .foregroundStyle(Color.suiteYellow)
+                }
+                .font(SuiteFont.regular(8))
+                .tracking(0.7)
+            }
+        }
+        .padding(10)
+        .background(Color.suiteSlab2)
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.suiteRule2)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var keyboardRangeTitle: String {
+        "\(P9Keygroup.noteName(keyboardBaseNote))–"
+            + P9Keygroup.noteName(min(127, keyboardBaseNote + 24))
+    }
+
+    private static func keyboardBase(near rootNote: Int) -> Int {
+        min(96, max(0, ((rootNote / 12) - 1) * 12))
+    }
+
+    private func handleKeyboardNote(_ note: Int) {
+        guard !editSession.isReplacing,
+              !isPreparingPreview,
+              (!editAttributes.playbackMode.requiresLoopMarkers
+                || loopValidationError == nil)
+        else { return }
+        selectedAuditionNote = note
+        switch keyboardBehavior {
+        case .playOnClick:
+            if rateIsChanged, convertedPreviewURL == nil {
+                prepareConvertedPreview(startAuditionAfter: true)
+            } else {
+                beginCurrentAudition()
+            }
+        case .selectForSpace:
+            refreshAuditionIfPossible()
+        }
     }
 
     private var bandwidthDouble: Binding<Double> {
@@ -1143,12 +1352,10 @@ struct ExternalSampleEditSheet: View {
         } label: {
             Image(systemName: "chevron.left")
         }
-        .buttonStyle(.plain)
-        .frame(width: 26, height: 24)
-        .background(Color.suiteSlab)
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.suiteRule2))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .buttonStyle(ZeroCrossingButtonStyle())
+        .contentShape(Rectangle())
         .disabled(previous == nil)
+        .accessibilityLabel("Previous zero crossing")
         .help("Move to the previous zero crossing")
 
         Image(systemName: zeroCrossingIcon(at: position))
@@ -1164,12 +1371,10 @@ struct ExternalSampleEditSheet: View {
         } label: {
             Image(systemName: "chevron.right")
         }
-        .buttonStyle(.plain)
-        .frame(width: 26, height: 24)
-        .background(Color.suiteSlab)
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.suiteRule2))
-        .clipShape(RoundedRectangle(cornerRadius: 5))
+        .buttonStyle(ZeroCrossingButtonStyle())
+        .contentShape(Rectangle())
         .disabled(next == nil)
+        .accessibilityLabel("Next zero crossing")
         .help("Move to the next zero crossing")
     }
 
@@ -1238,7 +1443,8 @@ struct ExternalSampleEditSheet: View {
             mode: editAttributes.playbackMode,
             direction: editAttributes.playbackDirection,
             start: auditionLoopStart,
-            end: auditionLoopEnd
+            end: auditionLoopEnd,
+            semitoneOffset: auditionSemitoneOffset
         )
     }
 
@@ -1252,6 +1458,10 @@ struct ExternalSampleEditSheet: View {
 
     private var auditionLoopEnd: Int {
         rateIsChanged ? Int((Double(loopEnd) * rateRatio).rounded()) : loopEnd
+    }
+
+    private var auditionSemitoneOffset: Int {
+        selectedAuditionNote - editAttributes.rootNote
     }
 
     private func toggleCurrentAudition() {
@@ -1273,8 +1483,299 @@ struct ExternalSampleEditSheet: View {
             mode: editAttributes.playbackMode,
             direction: editAttributes.playbackDirection,
             start: auditionLoopStart,
-            end: auditionLoopEnd
+            end: auditionLoopEnd,
+            semitoneOffset: auditionSemitoneOffset
         )
+    }
+}
+
+private enum SampleKeyboardBehavior: String, CaseIterable, Hashable {
+    case playOnClick
+    case selectForSpace
+
+    var title: String {
+        switch self {
+        case .playOnClick: return "Click note to hear"
+        case .selectForSpace: return "Select note for Space"
+        }
+    }
+}
+
+private struct TwoOctaveSampleKeyboard: View {
+    let baseNote: Int
+    let rootNote: Int
+    let selectedNote: Int
+    let noteAction: (Int) -> Void
+
+    private let whiteOffsets = [
+        0, 2, 4, 5, 7, 9, 11,
+        12, 14, 16, 17, 19, 21, 23, 24
+    ]
+    private let blackKeys: [(offset: Int, boundary: Int)] = [
+        (1, 1), (3, 2), (6, 4), (8, 5), (10, 6),
+        (13, 8), (15, 9), (18, 11), (20, 12), (22, 13)
+    ]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let whiteWidth = geometry.size.width / CGFloat(whiteOffsets.count)
+            let blackWidth = max(18, whiteWidth * 0.62)
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(whiteOffsets.enumerated()), id: \.offset) { index, offset in
+                    SamplePianoKey(
+                        note: baseNote + offset,
+                        isBlack: false,
+                        isRoot: baseNote + offset == rootNote,
+                        isSelected: baseNote + offset == selectedNote,
+                        action: noteAction
+                    )
+                    .frame(width: max(18, whiteWidth - 1), height: 112)
+                    .offset(x: CGFloat(index) * whiteWidth)
+                }
+                ForEach(Array(blackKeys.enumerated()), id: \.offset) { _, key in
+                    SamplePianoKey(
+                        note: baseNote + key.offset,
+                        isBlack: true,
+                        isRoot: baseNote + key.offset == rootNote,
+                        isSelected: baseNote + key.offset == selectedNote,
+                        action: noteAction
+                    )
+                    .frame(width: blackWidth, height: 70)
+                    .offset(
+                        x: CGFloat(key.boundary) * whiteWidth - blackWidth / 2
+                    )
+                    .zIndex(2)
+                }
+            }
+        }
+        .frame(height: 112)
+        .padding(5)
+        .background(Color.suiteBackground)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.suiteRule2)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+private struct SamplePianoKey: View {
+    let note: Int
+    let isBlack: Bool
+    let isRoot: Bool
+    let isSelected: Bool
+    let action: (Int) -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button { action(note) } label: {
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(keyFill)
+                Text(P9Keygroup.noteName(note))
+                    .font(SuiteFont.medium(isBlack ? 7 : 8))
+                    .foregroundStyle(labelColor)
+                    .padding(.bottom, isBlack ? 5 : 7)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(
+                        isSelected ? Color.suiteYellow : Color.suiteRule2,
+                        lineWidth: isSelected ? 3 : 1
+                    )
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("Audition \(P9Keygroup.noteName(note)), MIDI \(note)")
+        .accessibilityValue(
+            [isRoot ? "Root note" : nil, isSelected ? "Space note" : nil]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+        )
+        .help(
+            "\(P9Keygroup.noteName(note)) · MIDI \(note)"
+                + (isRoot ? " · Root note" : "")
+                + (isSelected ? " · Selected for Space" : "")
+        )
+    }
+
+    private var keyFill: Color {
+        if isRoot { return Color.suiteBlue }
+        if isBlack {
+            return hovering ? Color(nsColor: .darkGray) : Color.black
+        }
+        return hovering ? Color.suiteYellow.opacity(0.22) : Color.white
+    }
+
+    private var labelColor: Color {
+        if isRoot || isBlack { return .white }
+        return .black.opacity(0.82)
+    }
+}
+
+private struct SuiteKeyboardControlButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color.suiteInk)
+            .background(
+                configuration.isPressed ? Color.suiteBlue.opacity(0.3) : Color.suiteSlab
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.suiteRule2)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+    }
+}
+
+private struct SampleEditorSpaceKeyMonitor: NSViewRepresentable {
+    let handler: () -> Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(handler: handler)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        context.coordinator.attach(to: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.handler = handler
+        context.coordinator.attach(to: nsView)
+    }
+
+    final class Coordinator {
+        var handler: () -> Bool
+        private weak var window: NSWindow?
+        private var monitor: Any?
+
+        init(handler: @escaping () -> Bool) {
+            self.handler = handler
+        }
+
+        func attach(to view: NSView) {
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let window = view?.window else { return }
+                self.window = window
+                guard self.monitor == nil else { return }
+                self.monitor = NSEvent.addLocalMonitorForEvents(
+                    matching: .keyDown
+                ) { [weak self] event in
+                    guard let self,
+                          event.window === self.window,
+                          event.keyCode == 49,
+                          event.modifierFlags.intersection(
+                            [.command, .control, .option, .shift]
+                          ).isEmpty
+                    else { return event }
+                    if event.isARepeat { return nil }
+                    return self.handler() ? nil : event
+                }
+            }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+}
+
+private struct EditorSegmentedPicker<Option: Hashable>: View {
+    let title: String
+    let options: [Option]
+    @Binding var selection: Option
+    let segmentMinWidth: CGFloat
+    let label: (Option) -> String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(SuiteFont.medium(10))
+                .tracking(0.4)
+                .foregroundStyle(Color.suiteInk)
+                .fixedSize()
+            HStack(spacing: 2) {
+                ForEach(options, id: \.self) { option in
+                    let isSelected = selection == option
+                    Button {
+                        selection = option
+                    } label: {
+                        Text(label(option))
+                    }
+                    .buttonStyle(
+                        EditorSegmentButtonStyle(
+                            isSelected: isSelected,
+                            minWidth: segmentMinWidth
+                        )
+                    )
+                    .accessibilityLabel(label(option))
+                    .accessibilityValue(isSelected ? "Selected" : "")
+                }
+            }
+            .padding(2)
+            .background(Color.suiteSlab)
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.suiteRule2)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+private struct EditorSegmentButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let minWidth: CGFloat
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(isSelected ? SuiteFont.medium(10) : SuiteFont.regular(10))
+            .foregroundStyle(isSelected ? Color.suiteOnBlue : Color.suiteInk)
+            .lineLimit(1)
+            .padding(.horizontal, 11)
+            .frame(minWidth: minWidth, minHeight: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(
+                        isSelected
+                            ? Color.suiteBlue
+                            : configuration.isPressed
+                                ? Color.suiteSlab3
+                                : Color.suiteSlab2
+                    )
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+private struct ZeroCrossingButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        ZStack {
+            Color.clear
+            RoundedRectangle(cornerRadius: 6)
+                .fill(
+                    configuration.isPressed
+                        ? Color.suiteSlab2 : Color.suiteSlab
+                )
+                .frame(width: 34, height: 28)
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.suiteRule2)
+                .frame(width: 34, height: 28)
+            configuration.label
+                .font(.system(size: 11, weight: .semibold))
+        }
+        .frame(width: 44, height: 36)
+        .foregroundStyle(isEnabled ? Color.suiteInk : Color.suiteUnit)
+        .contentShape(Rectangle())
+        .opacity(isEnabled ? 1 : 0.5)
+        .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }
 

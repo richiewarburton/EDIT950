@@ -1,6 +1,6 @@
 # EDIT950 — Complete Source
 
-This is the complete buildable source project for EDIT950 1.8.24, build 42.
+This is the complete buildable source project for EDIT950 1.8.25, build 43.
 
 ## Included
 

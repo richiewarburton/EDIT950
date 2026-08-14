@@ -60,38 +60,78 @@ struct VisualSmokeRunner {
         window.title = "EDIT950 — Visual Smoke Test"
         window.contentView = hostingView
         window.makeKeyAndOrderFront(nil)
+        var captureView: NSView = hostingView
 
         do {
-            try await model.openImage(imageURL, readOnly: true)
-            model.addTag()
-            if let created = model.tags.last {
-                model.updateTag(created, name: "Archive", colorHex: "#D97706")
-                if let archiveTag = model.tags.first(where: { $0.id == created.id }) {
-                    model.toggleImageTag(archiveTag)
+            let showsSampleKeyboard = ProcessInfo.processInfo.environment[
+                "EDIT950_SHOW_SAMPLE_KEYBOARD"
+            ] == "1"
+            try await model.openImage(imageURL, readOnly: !showsSampleKeyboard)
+            if showsSampleKeyboard {
+                guard let sample = model.snapshot.files.first(where: \.isSample) else {
+                    throw VisualSmokeFailure.sampleUnavailable
                 }
-            }
-            model.addTag()
-            if let created = model.tags.last {
-                model.updateTag(created, name: "Favourite", colorHex: "#2563EB")
-                if let favourite = model.tags.first(where: { $0.id == created.id }) {
-                    model.toggleTag(
-                        favourite,
-                        for: Array(model.snapshot.files.filter {
-                            model.isNativeAkaiFile($0)
-                        }.prefix(2))
+                model.selection = [sample.id]
+                model.editSelectedSampleInAudioEditor()
+                for _ in 0..<60 where model.externalSampleEditSession == nil {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+                guard let editSession = model.externalSampleEditSession else {
+                    throw VisualSmokeFailure.sampleUnavailable
+                }
+                let editorRoot = ExternalSampleEditSheet(editSession: editSession)
+                    .environmentObject(model)
+                    .environmentObject(settings)
+                    .frame(width: 760, height: 900)
+                let editorHost = NSHostingView(rootView: editorRoot)
+                window.setContentSize(NSSize(width: 760, height: 900))
+                window.contentView = editorHost
+                captureView = editorHost
+            } else {
+                model.addTag()
+                if let created = model.tags.last {
+                    model.updateTag(created, name: "Archive", colorHex: "#D97706")
+                    if let archiveTag = model.tags.first(where: { $0.id == created.id }) {
+                        model.toggleImageTag(archiveTag)
+                    }
+                }
+                model.addTag()
+                if let created = model.tags.last {
+                    model.updateTag(created, name: "Favourite", colorHex: "#2563EB")
+                    if let favourite = model.tags.first(where: { $0.id == created.id }) {
+                        model.toggleTag(
+                            favourite,
+                            for: Array(model.snapshot.files.filter {
+                                model.isNativeAkaiFile($0)
+                            }.prefix(2))
+                        )
+                    }
+                }
+                if let firstFile = model.snapshot.files.first {
+                    model.selection = [firstFile.id]
+                }
+                if ProcessInfo.processInfo.environment[
+                    "EDIT950_SHOW_DIAGNOSTIC_LOG"
+                ] == "1" {
+                    model.diagnostics.record(
+                        .warning,
+                        category: "visual-test",
+                        message: "Visible diagnostic timeline example",
+                        fields: [
+                            "image": imageURL.path,
+                            "state": "Viewer is readable and selectable"
+                        ]
                     )
+                    model.isLogVisible = true
                 }
-            }
-            if let firstFile = model.snapshot.files.first {
-                model.selection = [firstFile.id]
             }
             try await Task.sleep(nanoseconds: 900_000_000)
-            hostingView.layoutSubtreeIfNeeded()
-            let bounds = hostingView.bounds
-            guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(in: bounds) else {
+            captureView.layoutSubtreeIfNeeded()
+            let bounds = captureView.bounds
+            guard let bitmap = captureView.bitmapImageRepForCachingDisplay(in: bounds) else {
                 throw VisualSmokeFailure.capture
             }
-            hostingView.cacheDisplay(in: bounds, to: bitmap)
+            captureView.cacheDisplay(in: bounds, to: bitmap)
             guard let data = bitmap.representation(using: .png, properties: [:]) else {
                 throw VisualSmokeFailure.capture
             }
@@ -108,4 +148,5 @@ struct VisualSmokeRunner {
 
 enum VisualSmokeFailure: Error {
     case capture
+    case sampleUnavailable
 }

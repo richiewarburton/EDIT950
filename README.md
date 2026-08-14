@@ -28,7 +28,25 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.24 (build 42)**. Requires macOS 14 or later.
+Current source version: **1.8.25 (build 43)**. Requires macOS 14 or later.
+
+### What is new in 1.8.25
+
+- a welcoming, zoom-aware launch screen lists recent IMGs and provides verified
+  **Load**, **Create Copy and Load**, **Open in FIND**, **Send to PLAY** and
+  **Create New** actions, plus 200 rotating workflow hints;
+- the S9 editor gains a collapsible two-octave pitch keyboard, sampler-style
+  varispeed audition, a blue root key, octave controls and Space-bar triggering;
+- loop-point arrows have forgiving full-button hit areas, the editor's segmented
+  controls share one clear visual style and long guidance text wraps correctly;
+- persistent, size-limited diagnostic logs are visible in both the window and
+  Settings, with copy, save, reveal and clear controls; and
+- EDIT950 and FIND950 now coordinate removable-volume use so Safe Eject stops
+  before metadata cleanup whenever the companion app is actively using the same
+  volume.
+
+See [the complete 1.8.25 release notes](ReleaseDocs/RELEASE_NOTES_1.8.25.md)
+for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
 

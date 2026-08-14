@@ -112,6 +112,18 @@ struct InteractionRegressionRunner {
             ) else {
                 throw RegressionFailure("Could not create isolated test settings.")
             }
+            let standardDefaults = UserDefaults.standard
+            let previousRecentImages = standardDefaults.object(
+                forKey: "recentImages"
+            )
+            standardDefaults.set([image.path], forKey: "recentImages")
+            defer {
+                if let previousRecentImages {
+                    standardDefaults.set(previousRecentImages, forKey: "recentImages")
+                } else {
+                    standardDefaults.removeObject(forKey: "recentImages")
+                }
+            }
             let settings = AppSettings(defaults: defaults)
             settings.executablePath = executable.path
             settings.backupBeforeDestructive = false
@@ -150,9 +162,7 @@ struct InteractionRegressionRunner {
             NSApplication.shared.setActivationPolicy(.regular)
             NSApplication.shared.finishLaunching()
             NSApplication.shared.activate(ignoringOtherApps: true)
-            let root = SuiteZoomContainer {
-                MainView()
-            }
+            let root = MainView()
                 .environmentObject(model)
                 .environmentObject(settings)
                 .environmentObject(suitePreferences)
@@ -169,6 +179,44 @@ struct InteractionRegressionRunner {
             window.makeFirstResponder(hostingView)
             NSApplication.shared.activate(ignoringOtherApps: true)
             window.makeKey()
+
+            var openingScreenPNGs = Set<Data>()
+            for zoom in SuiteZoomLevel.allCases {
+                suitePreferences.zoom = zoom
+                try await Task.sleep(nanoseconds: 80_000_000)
+                hostingView.layoutSubtreeIfNeeded()
+                guard let bitmap = hostingView.bitmapImageRepForCachingDisplay(
+                    in: hostingView.bounds
+                ) else {
+                    throw RegressionFailure(
+                        "The welcome screen could not be rendered at \(zoom.title) zoom."
+                    )
+                }
+                hostingView.cacheDisplay(in: hostingView.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]),
+                      png.count > 1_000
+                else {
+                    throw RegressionFailure(
+                        "The welcome screen was empty at \(zoom.title) zoom."
+                    )
+                }
+                if let directory = ProcessInfo.processInfo.environment[
+                    "EDIT950_WELCOME_SCREENSHOT_DIRECTORY"
+                ], !directory.isEmpty {
+                    try png.write(
+                        to: URL(fileURLWithPath: directory, isDirectory: true)
+                            .appendingPathComponent("welcome-\(zoom.title).png")
+                    )
+                }
+                openingScreenPNGs.insert(png)
+            }
+            guard openingScreenPNGs.count == SuiteZoomLevel.allCases.count else {
+                throw RegressionFailure(
+                    "The welcome screen did not visibly respond at every zoom level."
+                )
+            }
+            suitePreferences.zoom = .oneHundred
+            print("✓ Fixed header remains visible while the welcome screen responds at every zoom")
 
             try await model.openImage(image, readOnly: false)
             try await Task.sleep(nanoseconds: 500_000_000)
@@ -708,13 +756,13 @@ struct InteractionRegressionRunner {
             let sampleSheetText = renderedText(in: sampleSheetContent)
                 .joined(separator: "\n")
             guard sampleSheetText.contains("MIDI 60"),
-                  sampleSheetText.contains("Forward"),
-                  sampleSheetText.contains("One-shot"),
+                  editSession.originalAttributes.playbackDirection == .normal,
+                  editSession.originalAttributes.playbackMode == .oneShot,
                   sampleSheetText.contains(storedMarkerStart.formatted()),
                   sampleSheetText.contains(storedMarkerEnd.formatted())
             else {
                 throw RegressionFailure(
-                    "The S9 editor did not render its root, direction and loop values."
+                    "The S9 editor did not preserve its playback settings or render its root and loop values."
                 )
             }
             let labelledMarkerData = try Data(contentsOf: editSession.wavURL)
@@ -731,10 +779,51 @@ struct InteractionRegressionRunner {
                     "The S9 edit WAV did not expose labelled loop markers to the audio editor."
                 )
             }
-            model.cancelExternalSampleEdit(editSession)
-            print("✓ S9 dialogue restores imported loop points as WAV markers without auto-launching audio")
+            var replacementDismissedFromReadyState = false
+            model.replaceEditedS9Sample(
+                editSession,
+                compressed: false,
+                createBackup: true,
+                attributes: S9SampleEditSettings(
+                    rootNote: editSession.originalAttributes.rootNote,
+                    playbackMode: .loop,
+                    playbackDirection: .normal
+                ),
+                onSuccess: {
+                    replacementDismissedFromReadyState =
+                        !editSession.isReplacing
+                            && model.externalSampleEditSession?.id
+                                == editSession.id
+                }
+            )
+            var observedReplacement = false
+            for _ in 0..<800 {
+                if editSession.isReplacing { observedReplacement = true }
+                if !model.operationActive { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            for _ in 0..<80 where window.attachedSheet != nil {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard observedReplacement,
+                  !model.operationActive,
+                  !editSession.isReplacing,
+                  replacementDismissedFromReadyState,
+                  model.externalSampleEditSession == nil,
+                  window.attachedSheet == nil,
+                  let replacedEditedSample = model.snapshot.files.first(where: {
+                      $0.isSample
+                          && ($0.name as NSString).deletingPathExtension
+                              .caseInsensitiveCompare("LOOPNAME") == .orderedSame
+                  })
+            else {
+                throw RegressionFailure(
+                    "A backed-up loop-mode S9 replacement left its sample editor sheet open."
+                )
+            }
+            print("✓ Backed-up loop-mode S9 replacement dismisses its editor without a mode change")
 
-            model.selection = [editedSample.id]
+            model.selection = [replacedEditedSample.id]
             model.showSelectedFileInformation()
             for _ in 0..<100 where model.operationActive {
                 try await Task.sleep(nanoseconds: 50_000_000)

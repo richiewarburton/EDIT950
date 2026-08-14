@@ -8,6 +8,118 @@ struct TestRunner {
     private static let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 
     static func main() async {
+        test("cross-app volume interlock blocks cleanup and new work") {
+            let temporary = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "edit950-volume-coordination-\(UUID().uuidString)",
+                    isDirectory: true
+                )
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            let volume = temporary.appendingPathComponent("TEST USB", isDirectory: true)
+            let coordination = temporary.appendingPathComponent("coordination", isDirectory: true)
+            try FileManager.default.createDirectory(at: volume, withIntermediateDirectories: true)
+            let metadata = volume.appendingPathComponent(".DS_Store")
+            try Data("untouched".utf8).write(to: metadata)
+            let editID = UUID()
+            let edit = VolumeCoordinationCenter(
+                appName: "EDIT950",
+                instanceID: editID,
+                processID: 101,
+                rootURL: coordination,
+                processIsAlive: { $0 == 101 || $0 == 202 }
+            )
+            let find = VolumeCoordinationCenter(
+                appName: "FIND950",
+                processID: 202,
+                rootURL: coordination,
+                processIsAlive: { $0 == 101 || $0 == 202 }
+            )
+            let use = try edit.beginUse(
+                of: volume,
+                detail: "IMG open: OTHER.IMG"
+            )
+            do {
+                _ = try find.beginEject(of: volume)
+                throw TestFailure.expectedThrow
+            } catch let error as VolumeCoordinationError {
+                guard case .volumeInUse = error else { throw error }
+            }
+            let metadataAfterBlockedEject = try Data(contentsOf: metadata)
+            try expect(metadataAfterBlockedEject == Data("untouched".utf8))
+            use.release()
+            let eject = try find.beginEject(of: volume)
+            do {
+                _ = try edit.beginUse(of: volume, detail: "New work")
+                throw TestFailure.expectedThrow
+            } catch let error as VolumeCoordinationError {
+                guard case .ejectInProgress = error else { throw error }
+            }
+            eject.release()
+            let ownUse = try edit.beginUse(of: volume, detail: "IMG open")
+            let ownEject = try edit.beginEject(of: volume)
+            ownEject.release()
+            ownUse.release()
+        }
+
+        await asyncTest("diagnostic log persists, redacts, rolls and exports") {
+            try await MainActor.run {
+                let temporary = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "edit950-diagnostics-\(UUID().uuidString)",
+                        isDirectory: true
+                    )
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                let liveURL = temporary.appendingPathComponent("EDIT950.log")
+                let exportedURL = temporary.appendingPathComponent("exported.log")
+                let fixedDate = Date(timeIntervalSince1970: 1_723_638_400)
+                let log = DiagnosticLogStore(
+                    appName: "EDIT950",
+                    fileURL: liveURL,
+                    maximumBytes: 700,
+                    startSession: false,
+                    now: { fixedDate }
+                )
+                let privatePath = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent("Music/BREAKS.img").path
+                log.record(
+                    .info,
+                    category: "image",
+                    message: "Opened \(privatePath)",
+                    fields: [
+                        "image": privatePath,
+                        "workspace": "/tmp/edit950-workspace/file.wav"
+                    ]
+                )
+                try expect(log.text.contains("~/Music/BREAKS.img"))
+                try expect(log.text.contains("<temporary>/edit950-workspace/file.wav"))
+                try expect(!log.text.contains("/tmp/edit950-workspace"))
+                try expect(!log.text.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+                for index in 0..<30 {
+                    log.record(
+                        .debug,
+                        category: "retention",
+                        message: "event \(index)",
+                        fields: ["payload": String(repeating: "x", count: 40)]
+                    )
+                }
+                try expect(log.text.contains("event 29"))
+                try expect(!log.text.contains("event 0"))
+                try expect(log.text.utf8.count <= 700)
+                let reopened = DiagnosticLogStore(
+                    appName: "EDIT950",
+                    fileURL: liveURL,
+                    maximumBytes: 700,
+                    startSession: false
+                )
+                try expect(reopened.text == log.text)
+                try log.saveCopy(to: exportedURL)
+                let exported = try String(contentsOf: exportedURL, encoding: .utf8)
+                try expect(exported == log.text)
+                log.clear()
+                try expect(log.text.contains("Log cleared by user"))
+            }
+        }
+
         test("shared IMG, P9 and S9 tags use the FIND950-compatible store") {
             let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "edit950-tags-\(UUID().uuidString)",
@@ -178,12 +290,12 @@ struct TestRunner {
 
         test("950TOOLS responses identify the running EDIT950 bundle") {
             let sender = Tools950Interop.responseSender(infoDictionary: [
-                "CFBundleShortVersionString": "1.8.23",
-                "CFBundleVersion": "41"
+                "CFBundleShortVersionString": "1.8.22",
+                "CFBundleVersion": "40"
             ])
             try expect(sender.productID == "com.e45recordings.EDIT950")
-            try expect(sender.version == "1.8.23")
-            try expect(sender.build == "41")
+            try expect(sender.version == "1.8.22")
+            try expect(sender.build == "40")
         }
 
         test("950TOOLS protocol rejects unknown versions and incomplete export requests") {

@@ -34,9 +34,7 @@ struct EDIT950App: App {
 
     var body: some Scene {
         Window("EDIT950", id: "main") {
-            SuiteZoomContainer {
-                MainView()
-            }
+            MainView()
                 .environmentObject(model)
                 .environmentObject(settings)
                 .environmentObject(suitePreferences)
@@ -185,8 +183,11 @@ struct EDIT950App: App {
                 }
             }
             CommandMenu("Diagnostics") {
-                Toggle("Diagnostic Log", isOn: $model.isLogVisible)
+                Toggle("Show Diagnostic Log", isOn: $model.isLogVisible)
                     .keyboardShortcut("l", modifiers: [.command, .option])
+                Divider()
+                Button("Save Diagnostic Log…") { model.saveDiagnosticLog() }
+                Button("Reveal Live Log in Finder") { model.revealDiagnosticLog() }
                 Divider()
                 Button("Build PLAY950 Filter/Envelope Fixture…") {
                     model.buildPLAY950Fixture()
