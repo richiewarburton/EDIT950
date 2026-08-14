@@ -1,6 +1,6 @@
 # EDIT950 — Complete Source
 
-This is the complete buildable source project for EDIT950 1.8.23, build 41.
+This is the complete buildable source project for EDIT950 1.8.24, build 42.
 
 ## Included
 
@@ -12,7 +12,7 @@ This is the complete buildable source project for EDIT950 1.8.23, build 41.
   source, upstream README, provenance, compatibility patch and build guidance
   for the separately launched bundled helper.
 - `ReleaseDocs/` — community README and third-party notices.
-- `Package.swift`, `README.md` and `TEST_REPORT.md`.
+- `Package.swift`, `README.md`, `LICENSING.md` and `TEST_REPORT.md`.
 - `SOURCE_MANIFEST_SHA256.txt` — generated checksums for every packaged source file.
 
 Compiled `.build/` contents, the `Build/` distribution directory, Finder metadata and private user fixtures are deliberately excluded. They are outputs or test inputs, not application source.

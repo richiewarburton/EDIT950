@@ -7,7 +7,7 @@
 <p align="center"><strong>CREATE · EDIT · VERIFY</strong></p>
 
 [![macOS Swift CI](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml)
-[![MIT License](https://img.shields.io/badge/license-MIT-ff2a1a.svg)](LICENSE)
+[![PolyForm Internal Use](https://img.shields.io/badge/license-PolyForm%20Internal%20Use-ff2a1a.svg)](LICENSING.md)
 
 ## Open the S900/S950 disks you thought were stranded in the past
 
@@ -28,7 +28,7 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.23 (build 41)**. Requires macOS 14 or later.
+Current source version: **1.8.24 (build 42)**. Requires macOS 14 or later.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
 
@@ -251,7 +251,13 @@ Info.plist and architectures, and applies and checks a deep ad-hoc signature.
 
 ## Licence
 
-EDIT950 is released under the [MIT License](LICENSE). AKAI Util,
-Ableton Live, PLAY950 and FIND950 are separate products
-with their own licences. This is an independent project and is not affiliated
-with or endorsed by Akai Professional.
+Current original EDIT950 material is source-available under the
+[PolyForm Internal Use License 1.0.0](LICENSE), with
+[additional permission](LICENSING.md) for personal, educational and internal
+professional use—including paid music work. Distributing, bundling, hosting or
+selling EDIT950 requires a separate written agreement from Richie Warburton.
+Historical MIT versions retain their earlier terms.
+
+AKAI Util, Ableton Live, PLAY950 and FIND950 are separate products with their
+own licences. This is an independent project and is not affiliated with or
+endorsed by Akai Professional.

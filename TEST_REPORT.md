@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.23 (build 41)**
+Current source: **1.8.24 (build 42)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler

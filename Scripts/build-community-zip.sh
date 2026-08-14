@@ -33,6 +33,7 @@ cp Documentation/Images/edit950-shared-tag-settings.png "$PACKAGE_DIR/Screenshot
 cp Documentation/Images/edit950-verified-overwrite.png "$PACKAGE_DIR/Screenshots/"
 cp ReleaseDocs/COMMUNITY_README.md "$PACKAGE_DIR/README.md"
 cp LICENSE "$PACKAGE_DIR/LICENSE"
+cp LICENSING.md "$PACKAGE_DIR/LICENSING.md"
 cp ReleaseDocs/THIRD-PARTY-NOTICES.txt "$PACKAGE_DIR/THIRD-PARTY-NOTICES.txt"
 cp TEST_REPORT.md "$PACKAGE_DIR/TEST_REPORT.md"
 /usr/bin/ditto Documentation "$PACKAGE_DIR/Documentation"
@@ -45,6 +46,7 @@ cp TEST_REPORT.md "$PACKAGE_DIR/TEST_REPORT.md"
     "EDIT950.app/Contents/Resources/akaiutil" \
     "README.md" \
     "LICENSE" \
+    "LICENSING.md" \
     "THIRD-PARTY-NOTICES.txt" \
     "TEST_REPORT.md" \
     "Documentation/USER_GUIDE.md" \

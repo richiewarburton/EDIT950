@@ -1,4 +1,4 @@
-# EDIT950 1.8.23
+# EDIT950 1.8.24
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -10,7 +10,15 @@ release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
 
-Version 1.8.23 build 41 replaces the optional USBclean handoff with native Safe
+Version 1.8.24 build 42 changes the licence for original EDIT950 material from
+MIT to PolyForm Internal Use 1.0.0. Personal, educational and internal
+professional use—including paid music work—remains permitted. Redistributing,
+bundling, hosting or selling EDIT950 requires a separate written agreement.
+AKAI Util remains a separate GPL-2.0-or-later helper with its corresponding
+source, licence and redistribution rights intact. Earlier MIT releases retain
+their historical terms.
+
+Version 1.8.23 build 41 replaced the optional USBclean handoff with native Safe
 Eject. EDIT950 previews the exact removable-media metadata it will clean, removes
 only approved rules, verifies the volume again and asks macOS to eject it. Any
 cleanup or verification failure leaves the media mounted with a specific error.
@@ -75,7 +83,8 @@ Hardware testing has only been performed with an AKAI S950 fitted with a GOTEK d
 
 - `EDIT950.app` — Universal macOS application for Apple silicon and Intel Macs.
 - `README.md` — this installation and usage guide.
-- `LICENSE` — MIT licence for EDIT950.
+- `LICENSE` — PolyForm Internal Use 1.0.0 terms for original EDIT950 material.
+- `LICENSING.md` — permitted-use, distribution and third-party licence scope.
 - `THIRD-PARTY-NOTICES.txt` — official third-party download, source and licensing information.
 - `TEST_REPORT.md` — automated and genuine-image validation results.
 - `Documentation/` — the musician's user guide plus AKAI Util and native-format

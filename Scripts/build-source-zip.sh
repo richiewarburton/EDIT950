@@ -11,6 +11,7 @@ DIST_DIR="$PROJECT_DIR/Build/Distribution"
 PACKAGE_NAME="EDIT950 $VERSION Source"
 PACKAGE_DIR="$DIST_DIR/$PACKAGE_NAME"
 ZIP_PATH="$DIST_DIR/EDIT950-$VERSION-build-$BUILD_NUMBER-SOURCE.zip"
+CHECKSUM_PATH="$DIST_DIR/EDIT950-$VERSION-SHA256SUMS.txt"
 ARCHIVE_DIR="$PROJECT_DIR/.build/source-archive-history"
 
 mkdir -p "$DIST_DIR" "$ARCHIVE_DIR"
@@ -28,6 +29,7 @@ for SOURCE_ITEM in \
   .github \
   .gitignore \
   LICENSE \
+  LICENSING.md \
   Package.swift \
   README.md \
   SOURCE_README.md \
@@ -55,8 +57,16 @@ done
 
 /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$PACKAGE_DIR" "$ZIP_PATH"
 /usr/bin/unzip -t "$ZIP_PATH" >/dev/null
+(
+  cd "$DIST_DIR"
+  /usr/bin/shasum -a 256 \
+    "EDIT950-$VERSION-macOS-Universal.zip" \
+    "$(basename "$ZIP_PATH")" \
+    > "$(basename "$CHECKSUM_PATH")"
+)
 
 printf 'Version: %s (%s)\n' "$VERSION" "$BUILD_NUMBER"
 printf 'Source package: %s\n' "$PACKAGE_DIR"
 printf 'Source ZIP: %s\n' "$ZIP_PATH"
+printf 'Checksums: %s\n' "$CHECKSUM_PATH"
 /usr/bin/shasum -a 256 "$ZIP_PATH"
