@@ -115,31 +115,18 @@ struct MainView: View {
                 .environmentObject(model)
                 .environmentObject(settings)
         }
-        .alert(item: Binding(
-            get: { model.report?.isError == true ? model.report : nil },
-            set: { model.report = $0 }
-        )) { report in
-            let message = report.lines.joined(separator: "\n")
-            if message.localizedCaseInsensitiveContains("Full Disk Access") {
-                return Alert(
-                    title: Text(report.title),
-                    message: Text(message),
-                    primaryButton: .default(Text("Open Full Disk Access")) {
+        .overlay {
+            if let report = model.report, report.isError {
+                OperationReportOverlay(
+                    report: report,
+                    onDismiss: model.dismissReport,
+                    onOpenFullDiskAccess: {
                         model.dismissReport()
                         AppSettings.openFullDiskAccessSettings()
-                    },
-                    secondaryButton: .cancel(Text("OK")) {
-                        model.dismissReport()
                     }
                 )
-            } else {
-                return Alert(
-                    title: Text(report.title),
-                    message: Text(message),
-                    dismissButton: .default(Text("OK")) {
-                        model.dismissReport()
-                    }
-                )
+                .transition(.opacity)
+                .zIndex(100)
             }
         }
         .alert("Delete selected files permanently?", isPresented: $model.showDeleteConfirmation) {
@@ -327,6 +314,75 @@ struct MainView: View {
         alert.addButton(withTitle: "Copy and Replace")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn { model.copyToUSBAndEject() }
+    }
+}
+
+private struct OperationReportOverlay: View {
+    let report: OperationReport
+    let onDismiss: () -> Void
+    let onOpenFullDiskAccess: () -> Void
+
+    private var message: String {
+        report.lines.joined(separator: "\n")
+    }
+
+    private var needsFullDiskAccess: Bool {
+        message.localizedCaseInsensitiveContains("Full Disk Access")
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.42)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 22, weight: .medium))
+                        .foregroundStyle(Color.suiteAmber)
+                    Text(report.title.uppercased())
+                        .font(SuiteFont.medium(14))
+                        .tracking(2)
+                }
+
+                ScrollView(.vertical) {
+                    Text(message)
+                        .font(SuiteFont.regular(11))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 360)
+
+                HStack {
+                    if needsFullDiskAccess {
+                        Button("OPEN FULL DISK ACCESS") {
+                            onOpenFullDiskAccess()
+                        }
+                        .buttonStyle(SuiteSecondaryButtonStyle())
+                    }
+                    Spacer()
+                    Button("OK") {
+                        onDismiss()
+                    }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(22)
+            .frame(minWidth: 420, idealWidth: 520, maxWidth: 600)
+            .background(Color.suitePanel)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.suiteRule2, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
+            .padding(28)
+        }
+        .accessibilityAddTraits(.isModal)
+        .onExitCommand(perform: onDismiss)
     }
 }
 
@@ -1530,7 +1586,7 @@ enum NativeFileTableSelection {
     }
 }
 
-private struct NativeTableDoubleClickMonitor: NSViewRepresentable {
+struct NativeTableDoubleClickMonitor: NSViewRepresentable {
     let onDoubleClick: @MainActor (Int) -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -1568,24 +1624,30 @@ private struct NativeTableDoubleClickMonitor: NSViewRepresentable {
             eventMonitor = NSEvent.addLocalMonitorForEvents(
                 matching: .leftMouseDown
             ) { [weak self] event in
-                guard event.clickCount == 2,
-                      let self,
-                      let window = self.hostView?.window,
-                      event.window === window,
-                      let contentView = window.contentView,
-                      let table = NativeFileTableLocator.fileTable(
-                        at: event.locationInWindow,
-                        inside: contentView
-                      )
-                else { return event }
-                let point = table.convert(event.locationInWindow, from: nil)
-                let row = table.row(at: point)
-                guard row >= 0 else { return event }
+                guard let self else { return event }
                 Task { @MainActor in
-                    self.onDoubleClick(row)
+                    _ = self.processDoubleClick(event)
                 }
                 return event
             }
+        }
+
+        @discardableResult
+        func processDoubleClick(_ event: NSEvent) -> Bool {
+            guard event.clickCount == 2,
+                  let window = hostView?.window,
+                  event.window === window,
+                  let contentView = window.contentView,
+                  let table = NativeFileTableLocator.table(
+                    at: event.locationInWindow,
+                    inside: contentView
+                  )
+            else { return false }
+            let point = table.convert(event.locationInWindow, from: nil)
+            let row = table.row(at: point)
+            guard row >= 0 else { return false }
+            onDoubleClick(row)
+            return true
         }
 
         func uninstall() {
@@ -1612,19 +1674,18 @@ enum NativeFileTableLocator {
         return nil
     }
 
-    static func fileTable(
+    static func table(
         at windowPoint: NSPoint,
         inside view: NSView
     ) -> NSTableView? {
-        if let table = view as? NSTableView,
-           table.numberOfColumns >= 6 {
+        if let table = view as? NSTableView {
             let localPoint = table.convert(windowPoint, from: nil)
             if table.visibleRect.contains(localPoint) {
                 return table
             }
         }
         for subview in view.subviews {
-            if let table = fileTable(at: windowPoint, inside: subview) {
+            if let table = table(at: windowPoint, inside: subview) {
                 return table
             }
         }

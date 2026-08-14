@@ -218,7 +218,88 @@ struct InteractionRegressionRunner {
             suitePreferences.zoom = .oneHundred
             print("✓ Fixed header remains visible while the welcome screen responds at every zoom")
 
-            try await model.openImage(image, readOnly: false)
+            guard let recentTable = findTable(
+                in: hostingView,
+                expectedRowCount: 1,
+                expectedColumnCount: 4
+            ) else {
+                throw RegressionFailure(
+                    "The recent-image table could not be located for double-click testing."
+                )
+            }
+            let recentRow = recentTable.rect(ofRow: 0)
+            let doubleClickPoint = recentTable.convert(
+                NSPoint(x: recentRow.midX, y: recentRow.midY),
+                to: nil
+            )
+            guard let doubleClick = NSEvent.mouseEvent(
+                with: .leftMouseDown,
+                location: doubleClickPoint,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 2,
+                pressure: 1
+            ) else {
+                throw RegressionFailure("Could not create the recent-image double-click event.")
+            }
+            var openedRecentRow: Int?
+            let doubleClickMonitor = NativeTableDoubleClickMonitor.Coordinator { row in
+                openedRecentRow = row
+                guard row == 0 else { return }
+                model.openRecent(image)
+            }
+            doubleClickMonitor.hostView = hostingView
+            guard doubleClickMonitor.processDoubleClick(doubleClick),
+                  openedRecentRow == 0
+            else {
+                throw RegressionFailure(
+                    "The recent-image table did not resolve its double-clicked row."
+                )
+            }
+            var recentOpenAttempts = 0
+            while model.session == nil && recentOpenAttempts < 100 {
+                try await Task.sleep(nanoseconds: 20_000_000)
+                recentOpenAttempts += 1
+            }
+            guard model.session != nil else {
+                throw RegressionFailure(
+                    "Double-clicking the recent IMG row did not load the image."
+                )
+            }
+            print("✓ Double-clicking a recent IMG row loads the image")
+
+            let dismissibleErrorText = "TEST FULL DISK ACCESS ERROR"
+            model.report = OperationReport(
+                title: "EDIT950",
+                lines: [dismissibleErrorText, "Full Disk Access is required."],
+                isError: true
+            )
+            try await Task.sleep(nanoseconds: 100_000_000)
+            hostingView.layoutSubtreeIfNeeded()
+            guard renderedText(in: hostingView).contains(where: {
+                $0.contains(dismissibleErrorText)
+            }) else {
+                throw RegressionFailure(
+                    "The dismissible operation-error panel was not rendered."
+                )
+            }
+            model.dismissReport()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            hostingView.layoutSubtreeIfNeeded()
+            guard model.report == nil,
+                  !renderedText(in: hostingView).contains(where: {
+                    $0.contains(dismissibleErrorText)
+                  })
+            else {
+                throw RegressionFailure(
+                    "The operation-error panel did not disappear after dismissal."
+                )
+            }
+            print("✓ Safe Eject errors dismiss without leaving an app-modal alert")
+
             try await Task.sleep(nanoseconds: 500_000_000)
             hostingView.layoutSubtreeIfNeeded()
 
@@ -1172,6 +1253,28 @@ struct InteractionRegressionRunner {
         }
         for subview in view.subviews {
             if let table = findFileTable(in: subview, expectedRowCount: expectedRowCount) {
+                return table
+            }
+        }
+        return nil
+    }
+
+    private static func findTable(
+        in view: NSView,
+        expectedRowCount: Int,
+        expectedColumnCount: Int
+    ) -> NSTableView? {
+        if let table = view as? NSTableView,
+           table.numberOfRows == expectedRowCount,
+           table.numberOfColumns == expectedColumnCount {
+            return table
+        }
+        for subview in view.subviews {
+            if let table = findTable(
+                in: subview,
+                expectedRowCount: expectedRowCount,
+                expectedColumnCount: expectedColumnCount
+            ) {
                 return table
             }
         }

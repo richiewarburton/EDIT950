@@ -224,6 +224,15 @@ unmount and eject the volume. If any configured item cannot be removed or the
 verification scan cannot fully inspect the volume, EDIT950 leaves it mounted and
 reports the exact problem. Grant EDIT950 Full Disk Access to remove protected
 `.Spotlight-V100` data.
+
+Current test and downloadable builds are ad-hoc signed. Replacing an ad-hoc
+signed app changes the code identity macOS uses for privacy approval, so Full
+Disk Access may need to be removed and granted again after an update. A future
+consistently Developer ID-signed build should retain that approval across normal
+updates. If Safe Eject reports a permissions failure even though EDIT950 is
+listed, remove the old entry, add `/Applications/EDIT950.app` again, then quit
+and reopen EDIT950.
+
 Copy-to-USB uses a temporary destination and verifies size and SHA-256 before
 replacing the exact target filename; optional post-copy eject uses the same
 built-in safety path.

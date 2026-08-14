@@ -58,6 +58,10 @@ unchanged.
 - While Safe Eject is underway, new companion operations on that volume are
   refused, closing the race between the safety check and native macOS eject.
 - Stale leases from terminated processes are detected and removed.
+- Safe Eject failures now use a dismissible in-app error panel instead of an
+  app-modal alert that could leave the application trapped after a permissions
+  failure. **OK**, Return and Escape dismiss it; the Full Disk Access shortcut
+  dismisses it before opening System Settings.
 
 ## User-visible diagnostics
 
@@ -86,9 +90,10 @@ unchanged.
 
 - 73 self-contained EDIT950 tests passed with 0 failures.
 - The full interaction regression passed, including live loop and one-shot WAV
-  audition, zoom/header behaviour, full-cell selection, backed-up loop-mode
-  replacement dismissal, rename, deletion/Undo, exact drag export, Ableton
-  export, read-only export and fresh S950 IMG formatting.
+  audition, zoom/header behaviour, recent-IMG double-click loading, dismissible
+  Safe Eject errors, full-cell selection, backed-up loop-mode replacement
+  dismissal, rename, deletion/Undo, exact drag export, Ableton export,
+  read-only export and fresh S950 IMG formatting.
 - The focused and exact-collection export regression covers source fingerprints,
   collisions, capacity, rollback, exact selection and byte verification.
 - A dedicated visual smoke render verified the two-octave keyboard geometry,

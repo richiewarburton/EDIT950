@@ -330,7 +330,8 @@ Unknown P9 bytes and sampler-maintained address fields are preserved unless a do
   **Safe to unplug** in the header. Cancel remains available in the preview.
   EDIT950 re-scans before ejecting and leaves the volume mounted if any configured
   metadata remains or the scan is incomplete. Full Disk Access is required to
-  remove protected `.Spotlight-V100` data.
+  remove protected `.Spotlight-V100` data. Current ad-hoc signed builds can need
+  Full Disk Access to be removed and granted again after the app is replaced.
 - Successful operations report through the same non-blocking header style. Errors and confirmations before destructive actions remain dialogs.
 - Imported source WAV, S9 and P9 files are staged through temporary copies and are not modified. The temporary WAV intentionally opened for external S9 editing is the only staged file the chosen editor is expected to change.
 - Closing a P9 edit that has neither been written to the IMG nor saved as an edited copy requires confirmation.
