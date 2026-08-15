@@ -48,6 +48,12 @@ struct SettingsVisualRunner {
             defaultInspectorVisible: false,
             defaults: defaults
         )
+        let usesLightAppearance =
+            ProcessInfo.processInfo.environment["EDIT950_SMOKE_APPEARANCE"]
+                == "light"
+        if usesLightAppearance {
+            suitePreferences.appearance = .light
+        }
         let initialTab: SettingsView.Tab = switch ProcessInfo.processInfo.environment[
             "EDIT950_SETTINGS_TAB"
         ] {
@@ -57,12 +63,15 @@ struct SettingsVisualRunner {
         }
 
         NSApplication.shared.setActivationPolicy(.regular)
-        NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        NSApplication.shared.appearance = NSAppearance(
+            named: usesLightAppearance ? .aqua : .darkAqua
+        )
         NSApplication.shared.finishLaunching()
         let root = SettingsView(initialTab: initialTab)
             .environmentObject(settings)
             .environmentObject(model)
             .environmentObject(suitePreferences)
+            .preferredColorScheme(suitePreferences.appearance.colorScheme)
             .frame(width: 620, height: 560)
         let hostingView = NSHostingView(rootView: root)
         let window = NSWindow(

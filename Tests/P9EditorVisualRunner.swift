@@ -6,7 +6,7 @@ import SwiftUI
 struct P9EditorVisualRunner {
     static func main() {
         guard (3...4).contains(CommandLine.arguments.count) else {
-            fputs("usage: P9EditorVisualRunner <program.p9> <screenshot.png> [--all|--spread|--overwrite]\n", stderr)
+            fputs("usage: P9EditorVisualRunner <program.p9> <screenshot.png> [--all|--spread|--image|--overwrite]\n", stderr)
             exit(2)
         }
         let programURL = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -17,38 +17,71 @@ struct P9EditorVisualRunner {
             let mode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : ""
             let document = try P9EditorDocument(
                 data: sourceData,
-                source: mode == "--overwrite"
+                source: mode == "--overwrite" || mode == "--image"
                     ? .image(
                         filename: programURL.lastPathComponent,
-                        imageURL: URL(fileURLWithPath: "/tmp/VISUAL.img")
+                        imageURL: URL(fileURLWithPath: "/tmp/VISUAL.img"),
+                        volumePath: "/"
                     )
                     : .local(programURL)
             )
             guard try document.program.encoded() == sourceData, !document.hasChanges else {
                 throw P9EditorVisualFailure.roundTrip
             }
-            if mode == "--overwrite", !document.program.keygroups.isEmpty {
+            if (mode == "--overwrite" || mode == "--image"),
+               !document.program.keygroups.isEmpty {
                 var program = document.program
                 program.keygroups[0].softLoudness += 1
                 document.program = program
             }
             NSApplication.shared.setActivationPolicy(.regular)
-            NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+            let appearanceName: NSAppearance.Name =
+                ProcessInfo.processInfo.environment["EDIT950_SMOKE_APPEARANCE"]
+                    == "light" ? .aqua : .darkAqua
+            NSApplication.shared.appearance = NSAppearance(named: appearanceName)
             NSApplication.shared.finishLaunching()
+            let preferenceDomain = "EDIT950.P9VisualSmoke.\(UUID().uuidString)"
+            guard let preferenceDefaults = UserDefaults(
+                suiteName: preferenceDomain
+            ) else {
+                throw P9EditorVisualFailure.preferences
+            }
+            preferenceDefaults.removePersistentDomain(forName: preferenceDomain)
+            defer {
+                preferenceDefaults.removePersistentDomain(
+                    forName: preferenceDomain
+                )
+            }
+            let suitePreferences = SuitePreferences(
+                app: .edit,
+                defaultInspectorVisible: false,
+                defaults: preferenceDefaults
+            )
+            if let zoomValue = ProcessInfo.processInfo.environment[
+                "EDIT950_SMOKE_ZOOM"
+            ], let rawZoom = Double(zoomValue),
+               let zoom = SuiteZoomLevel(rawValue: rawZoom) {
+                suitePreferences.zoom = zoom
+            }
             let contentSize: NSSize
             let root: AnyView
             if mode == "--spread" {
-                contentSize = NSSize(width: 1240, height: 800)
+                contentSize = P9EditorSheet.presentationSize(
+                    for: suitePreferences.zoom
+                )
                 root = AnyView(
                     P9EditorSheet(
                         document: document,
                         initialSelection: Set(document.program.keygroups.indices),
                         showSpreadInitially: true
                     )
+                    .environmentObject(suitePreferences)
                     .frame(width: contentSize.width, height: contentSize.height)
                 )
             } else {
-                contentSize = NSSize(width: 1240, height: 800)
+                contentSize = P9EditorSheet.presentationSize(
+                    for: suitePreferences.zoom
+                )
                 let initialSelection = mode == "--all"
                     ? Set(document.program.keygroups.indices)
                     : nil
@@ -57,8 +90,14 @@ struct P9EditorVisualRunner {
                         document: document,
                         initialSelection: initialSelection,
                         showOverwriteConfirmationInitially: mode == "--overwrite",
-                        onOverwriteP9: mode == "--overwrite" ? { _, _ in } : nil
+                        onOverwriteP9:
+                            mode == "--overwrite" || mode == "--image"
+                                ? { _, _ in } : nil,
+                        onSaveP9AsNewInImage:
+                            mode == "--overwrite" || mode == "--image"
+                                ? { _, _ in } : nil
                     )
+                        .environmentObject(suitePreferences)
                         .frame(width: contentSize.width, height: contentSize.height)
                 )
             }
@@ -74,15 +113,19 @@ struct P9EditorVisualRunner {
                 backing: .buffered,
                 defer: false
             )
-            window.appearance = NSAppearance(named: .darkAqua)
+            window.appearance = NSAppearance(named: appearanceName)
             window.title = "P9 Keygroup Editor — Visual Smoke Test"
             window.contentView = hostingView
             window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
             hostingView.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+            let holdSeconds = ProcessInfo.processInfo.environment[
+                "EDIT950_VISUAL_HOLD_SECONDS"
+            ].flatMap(Double.init) ?? 0.5
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: holdSeconds))
             hostingView.layoutSubtreeIfNeeded()
-            window.attachedSheet?.appearance = NSAppearance(named: .darkAqua)
-            window.attachedSheet?.contentView?.appearance = NSAppearance(named: .darkAqua)
+            window.attachedSheet?.appearance = NSAppearance(named: appearanceName)
+            window.attachedSheet?.contentView?.appearance = NSAppearance(named: appearanceName)
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
 
             let captureWindow = mode == "--spread" || mode == "--overwrite"
@@ -112,5 +155,6 @@ struct P9EditorVisualRunner {
 
 private enum P9EditorVisualFailure: Error {
     case capture
+    case preferences
     case roundTrip
 }

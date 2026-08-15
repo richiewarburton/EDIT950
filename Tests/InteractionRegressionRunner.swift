@@ -32,6 +32,14 @@ struct InteractionRegressionRunner {
         let nativeDirectory = workspace.appendingPathComponent("native", isDirectory: true)
         let markerDirectory = workspace.appendingPathComponent("markers-native", isDirectory: true)
         let copiedDirectory = workspace.appendingPathComponent("copied", isDirectory: true)
+        let programBeforeNewSampleDirectory = workspace.appendingPathComponent(
+            "program-before-new-sample",
+            isDirectory: true
+        )
+        let programAfterNewSampleDirectory = workspace.appendingPathComponent(
+            "program-after-new-sample",
+            isDirectory: true
+        )
         let audioEditor = workspace.appendingPathComponent(
             "Test Audio Editor.app",
             isDirectory: true
@@ -44,6 +52,14 @@ struct InteractionRegressionRunner {
             try FileManager.default.createDirectory(at: nativeDirectory, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: markerDirectory, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: copiedDirectory, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(
+                at: programBeforeNewSampleDirectory,
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(
+                at: programAfterNewSampleDirectory,
+                withIntermediateDirectories: true
+            )
             try createTestApplication(at: audioEditor, launchLog: editorLaunchLog)
             defer { try? FileManager.default.removeItem(at: workspace) }
             try ImageFileOperations.createZeroFilledImage(
@@ -156,8 +172,25 @@ struct InteractionRegressionRunner {
             guard suitePreferences.zoom == .oneHundredFifty else {
                 throw RegressionFailure("Zoom Out did not return EDIT950 to 150%.")
             }
+            let zoomedEditorSize = ExternalSampleEditSheet.presentationSize(
+                for: suitePreferences.zoom
+            )
+            guard zoomedEditorSize == CGSize(width: 1_080, height: 630) else {
+                throw RegressionFailure(
+                    "The sample editor did not inherit EDIT950's 150% display zoom."
+                )
+            }
+            let zoomedProgramEditorSize = P9EditorSheet.presentationSize(
+                for: suitePreferences.zoom
+            )
+            guard zoomedProgramEditorSize
+                    == CGSize(width: 1_860, height: 1_200) else {
+                throw RegressionFailure(
+                    "The program editor did not inherit EDIT950's 150% display zoom."
+                )
+            }
             suitePreferences.zoom = .oneHundred
-            print("✓ Display zoom steps from 50–200% and returns to Actual Size")
+            print("✓ Display, sample editor and program editor zoom from 50–200%")
 
             NSApplication.shared.setActivationPolicy(.regular)
             NSApplication.shared.finishLaunching()
@@ -349,6 +382,49 @@ struct InteractionRegressionRunner {
                     "The temporary WAV loop could not be auditioned: \(audition.errorMessage ?? "unknown error")"
                 )
             }
+            let bandwidthPreview = workspace.appendingPathComponent(
+                "bandwidth-live-preview.wav"
+            )
+            let previewTask = Task.detached {
+                try WAVService.resampleS950(
+                    markerWAV,
+                    to: bandwidthPreview,
+                    conversion: S950BandwidthConversion(
+                        bandwidth: 9_600,
+                        mode: .antiAliased
+                    )
+                )
+            }
+            await Task.yield()
+            guard audition.isPlaying else {
+                throw RegressionFailure(
+                    "Preparing a bandwidth preview stopped the active audition."
+                )
+            }
+            let previewInspection = try await previewTask.value
+            let previewMarkers = try WAVService.cueSampleOffsets(
+                in: bandwidthPreview
+            ).sorted()
+            guard audition.isPlaying,
+                  previewMarkers.count == 2,
+                  previewMarkers[0] < previewMarkers[1],
+                  Int64(previewMarkers[1]) <= previewInspection.frameCount
+            else {
+                throw RegressionFailure(
+                    "The active audition did not survive bandwidth preview rendering with in-range loop markers."
+                )
+            }
+            audition.updateIfPlaying(
+                url: bandwidthPreview,
+                start: Int(previewMarkers[0]),
+                end: Int(previewMarkers[1])
+            )
+            guard audition.isPlaying, audition.errorMessage == nil else {
+                throw RegressionFailure(
+                    "The active audition did not switch to the new bandwidth preview."
+                )
+            }
+            print("✓ Bandwidth preview rendering and swap preserve active audition")
             audition.updateIfPlaying(
                 url: markerWAV,
                 start: Int(sourceMarkers[0] + 1),
@@ -834,16 +910,44 @@ struct InteractionRegressionRunner {
                 )
             }
             sampleSheetContent.layoutSubtreeIfNeeded()
-            let sampleSheetText = renderedText(in: sampleSheetContent)
-                .joined(separator: "\n")
-            guard sampleSheetText.contains("MIDI 60"),
-                  editSession.originalAttributes.playbackDirection == .normal,
-                  editSession.originalAttributes.playbackMode == .oneShot,
-                  sampleSheetText.contains(storedMarkerStart.formatted()),
-                  sampleSheetText.contains(storedMarkerEnd.formatted())
+            let compactSheetBounds = sampleSheetContent.bounds
+            guard compactSheetBounds.width >= 710,
+                  compactSheetBounds.height >= 410,
+                  let compactSheetBitmap = sampleSheetContent
+                    .bitmapImageRepForCachingDisplay(in: compactSheetBounds)
             else {
                 throw RegressionFailure(
-                    "The S9 editor did not preserve its playback settings or render its root and loop values."
+                    "The compact S9 workflow was not laid out at its 720×420 design size."
+                )
+            }
+            sampleSheetContent.cacheDisplay(
+                in: compactSheetBounds,
+                to: compactSheetBitmap
+            )
+            guard (compactSheetBitmap.representation(
+                using: .png,
+                properties: [:]
+            )?.count ?? 0) > 1_000,
+                  editSession.originalAttributes.rootNote == 60,
+                  editSession.originalAttributes.playbackDirection == .normal,
+                  editSession.originalAttributes.playbackMode == .oneShot,
+                  editSession.originalAttributes.loopStart == storedMarkerStart,
+                  editSession.originalAttributes.playbackEnd == storedMarkerEnd
+            else {
+                throw RegressionFailure(
+                    "The S9 editor did not preserve its playback settings or render its compact workflow. "
+                        + "size=\(Int(compactSheetBounds.width))×\(Int(compactSheetBounds.height)), "
+                        + "root=\(editSession.originalAttributes.rootNote), "
+                        + "direction=\(editSession.originalAttributes.playbackDirection.title), "
+                        + "mode=\(editSession.originalAttributes.playbackMode.title), "
+                        + "loop=\(editSession.originalAttributes.loopStart.map(String.init) ?? "nil")–"
+                        + "\(editSession.originalAttributes.playbackEnd)."
+                )
+            }
+            guard ExternalSampleEditSheet.saveAsNewActionTitle
+                == "SAVE AS NEW…" else {
+                throw RegressionFailure(
+                    "The sample editor did not expose its explicit Save As New action."
                 )
             }
             let labelledMarkerData = try Data(contentsOf: editSession.wavURL)
@@ -860,6 +964,202 @@ struct InteractionRegressionRunner {
                     "The S9 edit WAV did not expose labelled loop markers to the audio editor."
                 )
             }
+
+            try await model.exportNativeFiles(
+                [program],
+                to: programBeforeNewSampleDirectory,
+                policy: .replace,
+                revealInFinder: false
+            )
+            model.report = nil
+            guard let programBeforeURL = try FileManager.default
+                .contentsOfDirectory(
+                    at: programBeforeNewSampleDirectory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )
+                .first(where: {
+                    $0.pathExtension.caseInsensitiveCompare("p9") == .orderedSame
+                })
+            else {
+                throw RegressionFailure(
+                    "The P9 could not be captured before Save As New."
+                )
+            }
+            let programBeforeNewSample = try Data(contentsOf: programBeforeURL)
+            let imageBeforeNewSample = try Data(contentsOf: image)
+            let fileCountBeforeNewSample = model.snapshot.fileCount
+            let saveAsAttributes = S9SampleEditSettings(
+                rootNote: min(127, editSession.originalAttributes.rootNote + 1),
+                playbackMode: editSession.originalAttributes.playbackMode,
+                playbackDirection: .reverse
+            )
+            let newSampleResult = try await model.performEditedS9Creation(
+                editSession,
+                requestedName: "LOOPCOPY",
+                compressed: false,
+                createBackup: true,
+                attributes: saveAsAttributes
+            )
+            model.progress = nil
+            guard let newSampleBackup = newSampleResult.backupURL,
+                  try Data(contentsOf: newSampleBackup) == imageBeforeNewSample,
+                  model.snapshot.fileCount == fileCountBeforeNewSample + 1,
+                  model.snapshot.files.contains(where: {
+                      $0.isSample
+                          && sampleBaseName($0.name)
+                              .caseInsensitiveCompare("LOOPNAME") == .orderedSame
+                  }),
+                  let savedNewSample = model.snapshot.files.first(where: {
+                      $0.isSample
+                          && sampleBaseName($0.name)
+                              .caseInsensitiveCompare("LOOPCOPY") == .orderedSame
+                  }),
+                  newSampleResult.filename == savedNewSample.name,
+                  model.selection == Set([savedNewSample.id])
+            else {
+                throw RegressionFailure(
+                    "Save As New did not retain the original, add one verified S9 and select it."
+                )
+            }
+
+            guard let currentProgram = model.snapshot.files.first(where: {
+                $0.name.caseInsensitiveCompare(program.name) == .orderedSame
+            }) else {
+                throw RegressionFailure(
+                    "The P9 disappeared while saving an edited sample as new."
+                )
+            }
+            try await model.exportNativeFiles(
+                [currentProgram],
+                to: programAfterNewSampleDirectory,
+                policy: .replace,
+                revealInFinder: false
+            )
+            model.report = nil
+            guard let programAfterURL = try FileManager.default
+                .contentsOfDirectory(
+                    at: programAfterNewSampleDirectory,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                )
+                .first(where: {
+                    $0.pathExtension.caseInsensitiveCompare("p9") == .orderedSame
+                }),
+                  try Data(contentsOf: programAfterURL)
+                    == programBeforeNewSample
+            else {
+                throw RegressionFailure(
+                    "Save As New changed an existing P9 reference."
+                )
+            }
+
+            let imageAfterNewSample = try Data(contentsOf: image)
+            var duplicateNameRejected = false
+            do {
+                _ = try await model.performEditedS9Creation(
+                    editSession,
+                    requestedName: "LOOPCOPY",
+                    compressed: false,
+                    createBackup: true,
+                    attributes: saveAsAttributes
+                )
+            } catch {
+                duplicateNameRejected = true
+            }
+            var invalidNameRejected = false
+            do {
+                _ = try await model.performEditedS9Creation(
+                    editSession,
+                    requestedName: "BAD NAME",
+                    compressed: false,
+                    createBackup: true,
+                    attributes: saveAsAttributes
+                )
+            } catch {
+                invalidNameRejected = true
+            }
+            guard duplicateNameRejected,
+                  invalidNameRejected,
+                  try Data(contentsOf: image) == imageAfterNewSample
+            else {
+                throw RegressionFailure(
+                    "Save As New did not reject a collision or invalid S950 name before mutation."
+                )
+            }
+            model.s9CreationAvailableBytesOverride = 1
+            var insufficientSpaceRejected = false
+            do {
+                _ = try await model.performEditedS9Creation(
+                    editSession,
+                    requestedName: "LOOPFULL",
+                    compressed: false,
+                    createBackup: true,
+                    attributes: saveAsAttributes
+                )
+            } catch AppError.insufficientSpace {
+                insufficientSpaceRejected = true
+            } catch {
+                throw error
+            }
+            model.s9CreationAvailableBytesOverride = nil
+            model.progress = nil
+            guard insufficientSpaceRejected,
+                  try Data(contentsOf: image) == imageAfterNewSample
+            else {
+                throw RegressionFailure(
+                    "Save As New did not reject insufficient additional capacity before mutation."
+                )
+            }
+
+            model.s9ReplacementVerificationMutator = { exportedData in
+                var corrupted = exportedData
+                if !corrupted.isEmpty {
+                    corrupted[corrupted.count - 1] ^= 0x01
+                }
+                return corrupted
+            }
+            var forcedNewSampleVerificationFailed = false
+            do {
+                _ = try await model.performEditedS9Creation(
+                    editSession,
+                    requestedName: "LOOPFAIL",
+                    compressed: false,
+                    createBackup: true,
+                    attributes: saveAsAttributes
+                )
+            } catch {
+                forcedNewSampleVerificationFailed = true
+            }
+            model.s9ReplacementVerificationMutator = nil
+            model.progress = nil
+            guard forcedNewSampleVerificationFailed,
+                  try Data(contentsOf: image) == imageAfterNewSample,
+                  !model.snapshot.files.contains(where: {
+                      $0.isSample
+                          && sampleBaseName($0.name)
+                              .caseInsensitiveCompare("LOOPFAIL") == .orderedSame
+                  }),
+                  model.snapshot.files.contains(where: {
+                      $0.isSample
+                          && sampleBaseName($0.name)
+                              .caseInsensitiveCompare("LOOPNAME") == .orderedSame
+                  }),
+                  model.snapshot.files.contains(where: {
+                      $0.isSample
+                          && sampleBaseName($0.name)
+                              .caseInsensitiveCompare("LOOPCOPY") == .orderedSame
+                  })
+            else {
+                throw RegressionFailure(
+                    "A forced Save As New verification failure did not restore the complete IMG."
+                )
+            }
+            print("✓ Saved an edited S9 as a verified new sample while preserving its original and P9")
+            print("✓ Rejected invalid and duplicate Save As New names before IMG mutation")
+            print("✓ Rejected insufficient Save As New capacity before IMG mutation")
+            print("✓ Restored the complete IMG after a forced Save As New verification failure")
+
             var replacementDismissedFromReadyState = false
             model.replaceEditedS9Sample(
                 editSession,
@@ -872,14 +1172,14 @@ struct InteractionRegressionRunner {
                 ),
                 onSuccess: {
                     replacementDismissedFromReadyState =
-                        !editSession.isReplacing
+                        !editSession.isSaving
                             && model.externalSampleEditSession?.id
                                 == editSession.id
                 }
             )
             var observedReplacement = false
             for _ in 0..<800 {
-                if editSession.isReplacing { observedReplacement = true }
+                if editSession.isSaving { observedReplacement = true }
                 if !model.operationActive { break }
                 try await Task.sleep(nanoseconds: 50_000_000)
             }
@@ -888,7 +1188,7 @@ struct InteractionRegressionRunner {
             }
             guard observedReplacement,
                   !model.operationActive,
-                  !editSession.isReplacing,
+                  !editSession.isSaving,
                   replacementDismissedFromReadyState,
                   model.externalSampleEditSession == nil,
                   window.attachedSheet == nil,
@@ -903,6 +1203,49 @@ struct InteractionRegressionRunner {
                 )
             }
             print("✓ Backed-up loop-mode S9 replacement dismisses its editor without a mode change")
+
+            let imageBeforeNoChangeReplace = try Data(contentsOf: image)
+            try await model.prepareExternalSampleEdit(
+                file: replacedEditedSample,
+                editorURL: audioEditor
+            )
+            guard let unchangedEditSession = model.externalSampleEditSession,
+                  try !model.editedS9HasChanges(
+                    unchangedEditSession,
+                    attributes: S9SampleEditSettings(
+                        attributes: unchangedEditSession.originalAttributes
+                    ),
+                    loopPoints: nil,
+                    bandwidthConversion: nil
+                  )
+            else {
+                throw RegressionFailure(
+                    "A freshly opened sample editor incorrectly reported an edit."
+                )
+            }
+            var noChangeEditorDismissed = false
+            model.replaceEditedS9Sample(
+                unchangedEditSession,
+                compressed: false,
+                createBackup: true,
+                attributes: S9SampleEditSettings(
+                    attributes: unchangedEditSession.originalAttributes
+                ),
+                onSuccess: { noChangeEditorDismissed = true }
+            )
+            for _ in 0..<80 where window.attachedSheet != nil {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard noChangeEditorDismissed,
+                  model.externalSampleEditSession == nil,
+                  model.headerNotice?.title == "Nothing Changed",
+                  try Data(contentsOf: image) == imageBeforeNoChangeReplace
+            else {
+                throw RegressionFailure(
+                    "Replacing an unchanged sample did not close cleanly without mutating the IMG."
+                )
+            }
+            print("✓ Replacing an unchanged S9 closes the editor and reports that nothing was written")
 
             model.selection = [replacedEditedSample.id]
             model.showSelectedFileInformation()
@@ -1063,6 +1406,31 @@ struct InteractionRegressionRunner {
             model.selection = [storedProgram.id]
             print("✓ Sample choices come from the current S950 volume")
             print("✓ Canonicalized an underscored P9 name once and byte-verified it after keygroup add/delete")
+
+            var copiedProgram = newProgram.program
+            copiedProgram.keygroups[0].softFilter = 37
+            newProgram.replaceProgram(with: copiedProgram)
+            let fileCountBeforeProgramCopy = model.snapshot.fileCount
+            try await model.performSaveP9AsNewInImage(
+                newProgram,
+                requestedName: "TEST COPY"
+            )
+            guard newProgram.source.filename == "TEST COPY.P9",
+                  newProgram.program.name == "TEST COPY",
+                  newProgram.program.keygroups[0].softFilter == 37,
+                  model.snapshot.fileCount == fileCountBeforeProgramCopy + 1,
+                  model.snapshot.files.contains(where: {
+                    $0.name.caseInsensitiveCompare("TEST SPACE.P9") == .orderedSame
+                  }),
+                  model.snapshot.files.contains(where: {
+                    $0.name.caseInsensitiveCompare("TEST COPY.P9") == .orderedSame
+                  })
+            else {
+                throw RegressionFailure(
+                    "Saving an edited P9 as new did not preserve the original and verify the renamed copy."
+                )
+            }
+            print("✓ Saved an edited P9 directly into the IMG as a verified renamed copy")
 
             let imageBeforeAbletonExport = try Data(contentsOf: image)
             let templateURL = URL(

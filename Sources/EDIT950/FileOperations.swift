@@ -196,6 +196,84 @@ struct S9LoopPoints: Equatable {
         }
         return self
     }
+
+    func scaled(
+        fromSampleLength sourceSampleLength: UInt32,
+        toSampleLength destinationSampleLength: UInt32
+    ) throws -> S9LoopPoints {
+        let points = try validated(sampleLength: sourceSampleLength)
+        guard destinationSampleLength > 0 else {
+            throw AppError.verificationFailed(
+                "The converted sample contains no audio frames."
+            )
+        }
+
+        func scaledPosition(_ position: UInt32) -> UInt32 {
+            let converted = Double(position)
+                * Double(destinationSampleLength)
+                / Double(sourceSampleLength)
+            return UInt32(
+                max(
+                    0,
+                    min(
+                        Int64(destinationSampleLength),
+                        Int64(converted.rounded())
+                    )
+                )
+            )
+        }
+
+        return try S9LoopPoints(
+            start: scaledPosition(points.start),
+            end: scaledPosition(points.end)
+        ).validated(sampleLength: destinationSampleLength)
+    }
+}
+
+struct S9SampleStorageProjection: Equatable {
+    let originalBytes: Int64
+    let convertedBytes: Int64
+    let imageTotalBytes: Int64
+    let projectedImageUsedBytes: Int64
+    let projectedImageFreeBytes: Int64
+
+    init(
+        originalBytes: Int64,
+        originalSampleRate: Double,
+        convertedSampleRate: Int,
+        currentImageUsedBytes: Int64,
+        imageTotalBytes: Int64
+    ) {
+        let headerBytes = Int64(S9NativeSample.headerLength)
+        let safeOriginalBytes = max(headerBytes, originalBytes)
+        let safeOriginalRate = max(1, originalSampleRate)
+        let safeConvertedRate = max(1, convertedSampleRate)
+        let payloadBytes = max(0, safeOriginalBytes - headerBytes)
+        let rateRatio = Double(safeConvertedRate) / safeOriginalRate
+        let estimatedPayloadBytes = Int64(
+            (Double(payloadBytes) * rateRatio).rounded()
+        )
+        let safeImageTotal = max(0, imageTotalBytes)
+        let projectedUsed = max(
+            0,
+            currentImageUsedBytes - safeOriginalBytes
+                + headerBytes + estimatedPayloadBytes
+        )
+
+        self.originalBytes = safeOriginalBytes
+        convertedBytes = max(headerBytes, headerBytes + estimatedPayloadBytes)
+        self.imageTotalBytes = safeImageTotal
+        projectedImageUsedBytes = projectedUsed
+        projectedImageFreeBytes = max(0, safeImageTotal - projectedUsed)
+    }
+
+    var projectedImageUsedFraction: Double {
+        guard imageTotalBytes > 0 else { return 0 }
+        return min(
+            1,
+            Double(projectedImageUsedBytes) / Double(imageTotalBytes)
+        )
+    }
 }
 
 enum S9NativeSample {

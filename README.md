@@ -9,6 +9,8 @@
 [![macOS Swift CI](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml/badge.svg)](https://github.com/richiewarburton/EDIT950/actions/workflows/ci.yml)
 [![PolyForm Internal Use](https://img.shields.io/badge/license-PolyForm%20Internal%20Use-ff2a1a.svg)](LICENSING.md)
 
+**User manual:** [Read the EDIT950 musician's guide](Documentation/USER_GUIDE.md).
+
 ## Open the S900/S950 disks you thought were stranded in the past
 
 If your old sampler floppies now exist as `.img` files, EDIT950 makes
@@ -28,30 +30,39 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.25 (build 43)**. Requires macOS 14 or later.
+Current source version: **1.8.37 (build 55)**. Requires macOS 14 or later.
 
-### What is new in 1.8.25
+### What is new in 1.8.37
 
 - a welcoming, zoom-aware launch screen lists recent IMGs and provides verified
   **Load**, **Create Copy and Load**, **Open in FIND**, **Send to PLAY** and
   **Create New** actions, plus 200 rotating workflow hints;
-- the S9 editor gains a collapsible two-octave pitch keyboard, sampler-style
-  varispeed audition, a blue root key, octave controls and Space-bar triggering;
+- the S9 editor provides a collapsible two-octave pitch keyboard, sampler-style
+  varispeed audition, Space-bar triggering and optional input-only MIDI audition
+  with channel selection and a Panic control;
+- **Save As New** creates and verifies a distinct S9 while confirming that the
+  original sample and its P9 references remain unchanged;
+- the P9 editor follows Display zoom and supports complete keygroup reordering;
+- the main IMG header keeps used space, free space and percentage visible on a
+  persistent capacity meter;
+- System, Light and Dark appearances can be selected from Settings or the View
+  menu;
 - loop-point arrows have forgiving full-button hit areas, the editor's segmented
-  controls share one clear visual style and long guidance text wraps correctly;
+  controls share one clear visual style, bandwidth conversion scales loop
+  endpoints to the converted WAV and long guidance text wraps correctly;
 - persistent, size-limited diagnostic logs are visible in both the window and
   Settings, with copy, save, reveal and clear controls; and
 - EDIT950 and FIND950 now coordinate removable-volume use so Safe Eject stops
   before metadata cleanup whenever the companion app is actively using the same
   volume.
 
-See [the complete 1.8.25 release notes](ReleaseDocs/RELEASE_NOTES_1.8.25.md)
+See [the complete 1.8.37 release notes](ReleaseDocs/RELEASE_NOTES_1.8.37.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
 
-*EDIT950 opens the native disk directory: S9 samples can be auditioned from the
-play buttons, while P9 programs remain available for inspection and editing.*
+*EDIT950 opens the native disk directory. The header keeps current IMG capacity
+visible while S9 samples and P9 programs remain available for audition and editing.*
 
 ## How to use EDIT950
 
@@ -137,6 +148,15 @@ the index portable, but tags should not be edited on multiple Macs at once.
   conversion while preserving pitch, duration and scaled loops.
 
 User WAV, S9 and P9 source files are staged; they are never edited in place.
+
+![EDIT950 S9 playback, loop and MIDI audition controls](Documentation/Images/edit950-sample-editor.png)
+
+*The S9 editor combines root-note audition, loop controls, a two-octave keyboard
+and optional input-only MIDI triggering.*
+
+![EDIT950 S950 sampling-bandwidth controls](Documentation/Images/edit950-bandwidth-editor.png)
+
+*The bandwidth page shows the projected IMG use before Save As New or Replace.*
 
 ### Recover and edit original programs
 
@@ -265,6 +285,12 @@ copies and verify that source image checksums remain unchanged.
 Info.plist and architectures, and applies and checks a deep ad-hoc signature.
 
 ## Troubleshooting
+
+The in-window diagnostic activity log records actions and errors without
+recording IMG, P9, S9 or audio contents. Use **Copy**, **Save**, **Reveal** or
+**Clear** when a problem needs a reproducible report.
+
+![EDIT950 diagnostic activity log](Documentation/Images/edit950-diagnostic-log.png)
 
 - If an IMG does not open, expand the diagnostic log and inspect the AKAI Util
   output. A floppy image with the wrong byte size is not treated as a valid

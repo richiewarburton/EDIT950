@@ -94,19 +94,38 @@ enum WAVService {
         guard source.processingFormat.sampleRate > 0, source.length > 0 else {
             throw AppError.unsupportedWAV("The sample has no audio to resample.")
         }
-        let oldRate = source.processingFormat.sampleRate
         let newRate = Double(conversion.sampleRate)
-        let oldMarkers = try cueSampleOffsets(in: sourceURL)
+        let oldMarkers = try cueSampleOffsets(in: sourceURL).sorted()
 
         if conversion.mode == .antiAliased {
             try convertedPCM16(source: source, to: destinationURL, sampleRate: newRate)
         } else {
             try rawResampledPCM16(source: source, to: destinationURL, sampleRate: newRate)
         }
+        let outputInspection = try inspect(destinationURL, options: ImportOptions(
+            family: .s900, compressedS900: false, convertToMono: true,
+            preserveSampleRate: true, collisionPolicy: .replace
+        ))
         if oldMarkers.count == 2 {
-            let ratio = newRate / oldRate
-            let scaled = oldMarkers.map { UInt32((Double($0) * ratio).rounded()) }
-            if scaled[0] < scaled[1] { try replaceCueSampleOffsets(scaled, in: destinationURL) }
+            guard source.length <= Int64(UInt32.max),
+                  outputInspection.frameCount > 0,
+                  outputInspection.frameCount <= Int64(UInt32.max)
+            else {
+                throw AppError.verificationFailed(
+                    "The resampled WAV has an unsupported sample length."
+                )
+            }
+            let scaled = try S9LoopPoints(
+                start: oldMarkers[0],
+                end: oldMarkers[1]
+            ).scaled(
+                fromSampleLength: UInt32(source.length),
+                toSampleLength: UInt32(outputInspection.frameCount)
+            )
+            try replaceCueSampleOffsets(
+                [scaled.start, scaled.end],
+                in: destinationURL
+            )
         }
         return try inspect(destinationURL, options: ImportOptions(
             family: .s900, compressedS900: false, convertToMono: true,

@@ -42,6 +42,14 @@ struct VisualSmokeRunner {
             defaultInspectorVisible: false,
             defaults: preferenceDefaults
         )
+        if ProcessInfo.processInfo.environment["EDIT950_SMOKE_APPEARANCE"] == "light" {
+            suitePreferences.appearance = .light
+        }
+        if let zoomValue = ProcessInfo.processInfo.environment["EDIT950_SMOKE_ZOOM"],
+           let rawZoom = Double(zoomValue),
+           let zoom = SuiteZoomLevel(rawValue: rawZoom) {
+            suitePreferences.zoom = zoom
+        }
 
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -49,6 +57,7 @@ struct VisualSmokeRunner {
             .environmentObject(model)
             .environmentObject(settings)
             .environmentObject(suitePreferences)
+            .preferredColorScheme(suitePreferences.appearance.colorScheme)
             .frame(width: 1180, height: 760)
         let hostingView = NSHostingView(rootView: root)
         let window = NSWindow(
@@ -79,12 +88,27 @@ struct VisualSmokeRunner {
                 guard let editSession = model.externalSampleEditSession else {
                     throw VisualSmokeFailure.sampleUnavailable
                 }
-                let editorRoot = ExternalSampleEditSheet(editSession: editSession)
+                let pageIndex = Int(ProcessInfo.processInfo.environment[
+                    "EDIT950_SAMPLE_WORKFLOW_PAGE"
+                ] ?? "0") ?? 0
+                let editorRoot = ExternalSampleEditSheet(
+                    editSession: editSession,
+                    initialWorkflowPageIndex: pageIndex,
+                    initialSaveAsNewPromptVisible:
+                        ProcessInfo.processInfo.environment[
+                            "EDIT950_SHOW_SAVE_AS_NEW_PROMPT"
+                        ] == "1"
+                )
                     .environmentObject(model)
                     .environmentObject(settings)
-                    .frame(width: 760, height: 900)
+                    .environmentObject(suitePreferences)
+                    .preferredColorScheme(suitePreferences.appearance.colorScheme)
                 let editorHost = NSHostingView(rootView: editorRoot)
-                window.setContentSize(NSSize(width: 760, height: 900))
+                window.setContentSize(
+                    ExternalSampleEditSheet.presentationSize(
+                        for: suitePreferences.zoom
+                    )
+                )
                 window.contentView = editorHost
                 captureView = editorHost
             } else {

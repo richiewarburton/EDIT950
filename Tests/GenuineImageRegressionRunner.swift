@@ -328,7 +328,8 @@ struct GenuineImageRegressionRunner {
                 data: Data(contentsOf: secondExport),
                 source: .image(
                     filename: target.name,
-                    imageURL: workingImage
+                    imageURL: workingImage,
+                    volumePath: model.snapshot.currentPath
                 )
             )
             var noBackupProgram = noBackupEditor.program

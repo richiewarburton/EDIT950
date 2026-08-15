@@ -21,9 +21,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>1.8.25</string>
+	<string>1.8.37</string>
     <key>CFBundleVersion</key>
-	<string>43</string>
+	<string>55</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.music</string>
     <key>LSMinimumSystemVersion</key>
@@ -39,8 +39,6 @@
             <array>
                 <string>img</string>
                 <string>IMG</string>
-                <string>iso</string>
-                <string>ISO</string>
             </array>
             <key>CFBundleTypeIconFile</key>
             <string>AppIcon.icns</string>
@@ -53,6 +51,25 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.local.akai-disk-image</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>iso</string>
+                <string>ISO</string>
+            </array>
+            <key>CFBundleTypeIconFile</key>
+            <string>AppIcon.icns</string>
+            <key>CFBundleTypeName</key>
+            <string>ISO Disk Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>public.iso-image</string>
             </array>
         </dict>
         <dict>
@@ -90,6 +107,25 @@
             <key>LSItemContentTypes</key>
             <array>
                 <string>com.local.akai-s950-program</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>s9</string>
+                <string>S9</string>
+            </array>
+            <key>CFBundleTypeIconFile</key>
+            <string>AppIcon.icns</string>
+            <key>CFBundleTypeName</key>
+            <string>AKAI S950 Sample</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.local.akai-s950-sample</string>
             </array>
         </dict>
     </array>
@@ -130,7 +166,6 @@
                 <key>public.filename-extension</key>
                 <array>
                     <string>img</string>
-                    <string>iso</string>
                 </array>
             </dict>
         </dict>
@@ -151,6 +186,23 @@
                 <key>public.filename-extension</key>
                 <array>
                     <string>p9</string>
+                </array>
+            </dict>
+        </dict>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>AKAI S950 sample</string>
+            <key>UTTypeIdentifier</key>
+            <string>com.local.akai-s950-sample</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>s9</string>
                 </array>
             </dict>
         </dict>

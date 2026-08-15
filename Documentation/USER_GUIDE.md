@@ -21,8 +21,11 @@ This guide assumes macOS 14 or later.
    current download and source-build status.
 2. Open the app. If macOS blocks the first launch, Control-click the app, choose
    **Open**, then confirm.
-3. Drag an `.img` file onto the window, or choose **Open Image**.
-4. For an irreplaceable archive, leave **Open read-only** switched on at first.
+3. The launch screen lists recent IMGs. Use **Load** to reopen one, or **Create
+   Copy and Load** to make a byte-verified working copy first. **Open in FIND**,
+   **Send to PLAY** and **Create New** are available from the same screen.
+4. You can also drag an `.img` file onto the window or choose **Open Image**.
+5. For an irreplaceable archive, leave **Open read-only** switched on at first.
 
 AKAI Util 4.6.7 is included with EDIT950. No separate download, path selection,
 `chmod` command or other Terminal setup is required. EDIT950 uses it for the
@@ -32,8 +35,8 @@ code.
 ![EDIT950 browsing samples and programs on an IMG](Images/edit950-browser.png)
 
 Samples and programs have different colours and icons. The blue play button
-auditions a sample. The free-space display tells you how much room remains on
-the disk image.
+auditions a sample. The persistent header meter shows used space, free space
+and the percentage of the disk image currently occupied.
 
 The lock at the bottom means the IMG is open read-only. You can listen and
 inspect safely, but EDIT950 will not offer actions that change the disk.
@@ -79,9 +82,35 @@ sample editor you can:
 - change loop and playback behaviour; and
 - reduce bandwidth for a smaller, rougher, more obviously S950-flavoured sound.
 
+![S9 playback, loop and MIDI audition controls](Images/edit950-sample-editor.png)
+
+Expand **Keyboard** for a two-octave playing surface. The native root note is
+blue and the note assigned to Space has a yellow marker. **Click plays note**
+auditions directly from the keyboard; **Audition uses note** selects the pitch
+used by the main Audition button and Space. The result uses sampler-style
+varispeed, so pitch and playback speed change together.
+
+**MIDI Audition** is optional and input-only. Choose a MIDI channel or Omni,
+then play a connected controller. EDIT950 neither sends MIDI nor changes the
+source sample. **Panic** clears held-note state if a controller connection is
+interrupted.
+
 Bandwidth is best treated by ear. Lower settings use less sampler memory and
 lose more top end; the raw mode can add deliberate grit and aliasing. Prepare
-and audition the preview before saving.
+and audition the preview before saving. Loop endpoints are scaled to the actual
+converted WAV frame count while the preview sample rate is being changed.
+
+![S950 sampling bandwidth and projected IMG use](Images/edit950-bandwidth-editor.png)
+
+The bandwidth page shows the projected sample size and IMG capacity before the
+final save. Its Clean mode filters frequencies that cannot survive the lower
+rate; Raw keeps the unfiltered conversion character.
+
+At the final step, choose **Save As New** to add a separately named S9 or
+**Replace** to update the existing one. Save As New checks directory entries and
+sample memory, re-exports the new S9 for byte comparison, and verifies that the
+original S9 and its P9 references are unchanged. Both actions offer a complete,
+verified IMG backup before writing.
 
 ## Understand a program without becoming a technician
 
@@ -106,6 +135,10 @@ when the program uses a second layer for harder playing.
 Turn on **MIDI Monitor** if you want incoming notes from a connected keyboard to
 highlight the matching zones. It listens only; it does not send MIDI or make
 sound by itself.
+
+Display zoom applies to the P9 editor as well as the main browser. Keygroup rows
+show their musical and MIDI ranges and can be dragged to reorder complete
+keygroup records without rebuilding their musical settings.
 
 When you are experimenting, use **Save Edited Copy…**. The original P9 remains
 untouched until you deliberately choose to replace it in the IMG.
@@ -192,6 +225,20 @@ Use **Settings → Shared Tag Index** to reveal, move or export a copy of the ta
 library. A synced folder is fine, but avoid changing tags on two Macs at the
 same time.
 
+## Set the appearance and read diagnostics
+
+Choose **System**, **Light** or **Dark** in Settings or the View menu. The choice
+is shared across 950TOOLS applications that support it. Display zoom remains a
+separate per-application setting.
+
+EDIT950 keeps a rolling, size-limited diagnostic activity log. It records
+application actions, helper commands and errors, but not IMG, P9, S9 or audio
+contents. Home and temporary paths are shortened. Open the viewer from the
+window or Settings, then use **Copy**, **Save**, **Reveal** or **Clear** when a
+problem needs a readable report.
+
+![The EDIT950 diagnostic activity log](Images/edit950-diagnostic-log.png)
+
 ## Work with FIND950
 
 FIND950 is quicker when you do not yet know which disk contains the sound.
@@ -217,6 +264,11 @@ keeps the previous playable sound if the reload fails.
 
 EDIT950 changes the IMG file, not a physical disk or drive. Move the checked IMG
 into the Gotek, USB or disk-writing routine you already trust.
+
+EDIT950 and FIND950 coordinate use of removable volumes. Safe Eject stops before
+cleanup if either app is scanning, exporting, auditioning or otherwise using the
+same drive, and names the operation that must finish. No configured metadata is
+removed in that case. Idle cached FIND950 browsing does not block eject.
 
 Keep the rescued original separately. A working copy is for music-making; the
 archive copy is for the future.

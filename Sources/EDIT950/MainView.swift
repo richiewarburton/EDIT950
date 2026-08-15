@@ -99,6 +99,12 @@ struct MainView: View {
                         createBackup: createBackup
                     )
                 },
+                onSaveP9AsNewInImage: { document, requestedName in
+                    model.saveP9AsNewInImage(
+                        document,
+                        requestedName: requestedName
+                    )
+                },
                 onCreateP9InImage: { document in
                     model.createP9InImage(document)
                 },
@@ -109,6 +115,7 @@ struct MainView: View {
                     model.importAbletonDrumRack(draft, into: document)
                 }
             )
+            .environmentObject(preferences)
         }
         .sheet(item: $model.externalSampleEditSession) { editSession in
             ExternalSampleEditSheet(editSession: editSession)
@@ -171,6 +178,13 @@ struct MainView: View {
                 Label("NEW", systemImage: "plus.rectangle.on.rectangle")
             }
             .help("Create or format an image")
+
+            Button(action: model.closeImage) {
+                Label("CLOSE IMG", systemImage: "xmark.circle")
+                    .labelStyle(.titleAndIcon)
+            }
+            .disabled(model.session == nil || model.isBusy)
+            .help("Close the current IMG (⌘W)")
 
             Button(action: model.importPanel) {
                 Label("IMPORT", systemImage: "square.and.arrow.down")
@@ -482,20 +496,12 @@ private struct BrowserHeader: View {
                 }
                 .menuStyle(.borderlessButton)
                 .help("Tag this IMG in EDIT950 and FIND950")
-                Button(action: model.closeImage) {
-                    Label("CLOSE IMG", systemImage: "xmark.circle")
-                }
-                .buttonStyle(SuiteSecondaryButtonStyle())
-                .disabled(model.isBusy)
-                .help("Close the current IMG (⌘W)")
+                HeaderIMGCapacityMeter()
+                    .frame(minWidth: 180, idealWidth: 220, maxWidth: 250)
+                    .layoutPriority(1)
                 VStack(alignment: .trailing, spacing: 3) {
                     Text("\(model.snapshot.fileCount) FILES")
                         .font(SuiteFont.medium(19))
-                        .monospacedDigit()
-                    Text("\(model.snapshot.freeBytes.formattedByteCount.uppercased()) FREE")
-                        .font(SuiteFont.regular(10))
-                        .tracking(1.4)
-                        .foregroundStyle(Color.suiteUnit)
                         .monospacedDigit()
                 }
             }
@@ -509,6 +515,34 @@ private struct BrowserHeader: View {
         model.snapshot.volumes.first {
             $0.path == model.snapshot.currentPath
         }?.name ?? "Choose Volume"
+    }
+}
+
+private struct HeaderIMGCapacityMeter: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(
+                "\(model.snapshot.usedBytes.formattedByteCount.uppercased()) USED · "
+                    + "\(model.snapshot.freeBytes.formattedByteCount.uppercased()) FREE"
+            )
+            .font(SuiteFont.medium(8))
+            .tracking(0.55)
+            .foregroundStyle(Color.suiteInk)
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+
+            SuiteIMGCapacityMeter(
+                usedBytes: model.snapshot.usedBytes,
+                totalBytes: model.snapshot.totalBytes,
+                accessibilityLabel: "Current IMG capacity"
+            )
+        }
+        .help(
+            "Current IMG usage. Updates after imports, deletions and verified replacements."
+        )
     }
 }
 
@@ -861,6 +895,12 @@ private struct RecentImagesDashboard: View {
                     .tracking(2.2)
                     .foregroundStyle(Color.suiteLabel)
                 Spacer()
+                Toggle("OPEN READ-ONLY", isOn: $model.currentReadOnlyChoice)
+                    .toggleStyle(.checkbox)
+                    .font(SuiteFont.regular(9))
+                    .help(
+                        "Browse, audition and export without allowing changes to the IMG"
+                    )
                 Text("\(rows.count) RECENT")
                     .font(SuiteFont.regular(9))
                     .tracking(1.2)
@@ -1009,7 +1049,7 @@ private struct RecentImagesDashboard: View {
                 .frame(width: 30)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text("EDIT950 HINT · \(hintIndex + 1) OF \(Edit950HintStore.hints.count)")
+                Text("EDIT950 HINT")
                     .font(SuiteFont.medium(9))
                     .tracking(1.5)
                     .foregroundStyle(Color.suiteAmber)
@@ -1115,15 +1155,15 @@ private enum Edit950HintStore {
                 "Comfortable table density gives each file more vertical space; Dense shows more rows.",
                 "Display zoom changes the IMG browser while the app header remains stable and readable.",
                 "The current volume name appears in the header when an image contains several volumes.",
-                "The header always shows the file count and remaining image capacity for an open IMG."
+                "The header always shows the file count, used and free space, percentage and IMG capacity meter for an open image."
             ],
             [
                 "Press Space with one S9 selected to start or stop its audition.",
                 "The play icon beside an S9 gives quick one-shot audition from the file table.",
                 "Sample auditions use temporary, session-scoped WAV exports and do not change the IMG.",
                 "Looping auditions follow the S9 playback mode and its valid stored loop points.",
-                "The sample editor can audition root pitch, direction, mode and bandwidth together.",
-                "Only one sample audition plays at a time; starting another replaces the current one.",
+                "The sample editor auditions pitch, direction, mode and bandwidth from its keys or MIDI Audition.",
+                "MIDI Audition is off by default, accepts Omni or one channel and sends no MIDI.",
                 "If an edited sample sounds stale, Refresh rebuilds the session audition cache.",
                 "A cache failure never rolls back a native IMG edit that has already been verified.",
                 "Reverse playback can be auditioned before committing the S9 replacement.",
@@ -1298,7 +1338,7 @@ private enum Edit950HintStore {
                 "Tags can carry descriptive detail that does not fit in an S950 filename."
             ],
             [
-                "The header's FREE value updates after imports, deletions and verified replacements.",
+                "The header capacity meter updates after imports, deletions and verified replacements.",
                 "Lower bandwidth can reduce an S9's memory use while preserving pitch and duration.",
                 "Estimated IMG after replacement helps catch a sample that will not fit.",
                 "Delete unused material from a working copy when you need space for another program.",
@@ -2178,7 +2218,7 @@ private struct DiagnosticLogContents: View {
             HStack {
                 Label("Diagnostic Activity Log", systemImage: "waveform.path.ecg")
                     .font(SuiteFont.medium(10))
-                Text("ROLLING · \(diagnostics.text.utf8.count.formatted()) BYTES")
+                Text(diagnosticSizeLabel)
                     .font(SuiteFont.regular(9))
                     .foregroundStyle(Color.suiteUnit)
                 Spacer()
@@ -2217,9 +2257,9 @@ private struct DiagnosticLogContents: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     Text(
-                        diagnostics.text.isEmpty
+                        diagnostics.visibleText.isEmpty
                             ? "Activity, dialogue state, IMG operations, sample edits, errors and cleaned AKAI Util output will appear here."
-                            : diagnostics.text
+                            : diagnostics.visibleText
                     )
                     .font(SuiteFont.regular(10))
                     .textSelection(.enabled)
@@ -2228,7 +2268,7 @@ private struct DiagnosticLogContents: View {
                     Color.clear.frame(height: 1).id("diagnostic-log-end")
                 }
                 .onAppear { proxy.scrollTo("diagnostic-log-end", anchor: .bottom) }
-                .onChange(of: diagnostics.text) { _, _ in
+                .onChange(of: diagnostics.visibleText) { _, _ in
                     proxy.scrollTo("diagnostic-log-end", anchor: .bottom)
                 }
             }
@@ -2240,5 +2280,14 @@ private struct DiagnosticLogContents: View {
         } message: {
             Text("Earlier entries will be removed. EDIT950 will immediately continue recording new activity.")
         }
+    }
+
+    private var diagnosticSizeLabel: String {
+        let fullBytes = diagnostics.text.utf8.count
+        let visibleBytes = diagnostics.visibleText.utf8.count
+        if visibleBytes < fullBytes {
+            return "LATEST \(visibleBytes.formatted()) OF \(fullBytes.formatted()) BYTES"
+        }
+        return "ROLLING · \(fullBytes.formatted()) BYTES"
     }
 }

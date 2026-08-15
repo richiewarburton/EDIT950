@@ -14,6 +14,8 @@ struct SettingsView: View {
     @State private var customCleanupName = ""
     @State private var cleanupException = ""
     @State private var cleanupError: String?
+    @State private var pendingFileAssociations: [AkaiFileAssociation] = []
+    @State private var fileAssociationError: String?
 
     init(initialTab: Tab = .general) {
         _selectedTab = State(initialValue: initialTab)
@@ -23,6 +25,12 @@ struct SettingsView: View {
         TabView(selection: $selectedTab) {
             Form {
                 Section("Appearance") {
+                    Picker("Theme", selection: $preferences.appearance) {
+                        ForEach(SuiteAppearance.allCases) { appearance in
+                            Text(appearance.title).tag(appearance)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                     Picker("Table density", selection: $preferences.density) {
                         ForEach(SuiteDensity.allCases) { density in
                             Text(density.title).tag(density)
@@ -43,6 +51,47 @@ struct SettingsView: View {
                     Button("Validate Again") {
                         Task { await settings.validateExecutable() }
                     }
+                }
+                Section("Finder File Associations") {
+                    ForEach(AkaiFileAssociation.allCases) { association in
+                        LabeledContent(
+                            "\(association.filenameExtension) · \(association.title)"
+                        ) {
+                            if settings.defaultFileAssociations.contains(
+                                association
+                            ) {
+                                Label("EDIT950 is Default", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(Color.suiteGreen)
+                            } else {
+                                Button("Use EDIT950…") {
+                                    pendingFileAssociations = [association]
+                                }
+                                .disabled(settings.isUpdatingFileAssociations)
+                            }
+                        }
+                    }
+                    HStack {
+                        Button("Refresh Status") {
+                            settings.refreshFileAssociations()
+                        }
+                        Spacer()
+                        if settings.isUpdatingFileAssociations {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button("Use EDIT950 for IMG, P9 and S9…") {
+                            pendingFileAssociations = AkaiFileAssociation.allCases
+                        }
+                        .disabled(
+                            settings.isUpdatingFileAssociations
+                                || settings.defaultFileAssociations.count
+                                    == AkaiFileAssociation.allCases.count
+                        )
+                    }
+                    Text(
+                        "This changes the system-wide app Finder uses when you double-click these file types. P9 opens in the standalone program editor. S9 imports into the currently open writable IMG; it is never modified in place."
+                    )
+                    .font(SuiteFont.regular(10))
+                    .foregroundStyle(Color.suiteUnit)
                 }
                 Section("S950 Import Defaults") {
                     Toggle("Convert WAV files to mono", isOn: $settings.defaultMono)
@@ -259,6 +308,30 @@ struct SettingsView: View {
         } message: {
             Text(cleanupError ?? "Unknown error")
         }
+        .alert("Change Finder File Associations?", isPresented: Binding(
+            get: { !pendingFileAssociations.isEmpty },
+            set: { if !$0 { pendingFileAssociations = [] } }
+        )) {
+            Button("Cancel", role: .cancel) {
+                pendingFileAssociations = []
+            }
+            Button("Use EDIT950") {
+                applyPendingFileAssociations()
+            }
+        } message: {
+            Text(fileAssociationWarning)
+        }
+        .alert("File Association Failed", isPresented: Binding(
+            get: { fileAssociationError != nil },
+            set: { if !$0 { fileAssociationError = nil } }
+        )) {
+            Button("OK", role: .cancel) { fileAssociationError = nil }
+        } message: {
+            Text(fileAssociationError ?? "Unknown error")
+        }
+        .onAppear {
+            settings.refreshFileAssociations()
+        }
     }
 
     private func addCustomCleanupName() {
@@ -276,6 +349,25 @@ struct SettingsView: View {
             cleanupException = ""
         } catch {
             cleanupError = error.localizedDescription
+        }
+    }
+
+    private var fileAssociationWarning: String {
+        let extensions = pendingFileAssociations
+            .map(\.filenameExtension)
+            .joined(separator: ", ")
+        return "macOS will make EDIT950 the default app for \(extensions) files. This affects double-click and Open behavior across Finder. Existing files are not changed. You can choose another default later in Finder's Get Info window."
+    }
+
+    private func applyPendingFileAssociations() {
+        let associations = pendingFileAssociations
+        pendingFileAssociations = []
+        Task {
+            do {
+                try await settings.makeEDIT950Default(for: associations)
+            } catch {
+                fileAssociationError = error.localizedDescription
+            }
         }
     }
 }

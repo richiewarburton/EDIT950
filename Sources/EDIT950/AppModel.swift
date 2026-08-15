@@ -15,7 +15,7 @@ final class ExternalSampleEditSession: ObservableObject, Identifiable {
     let originalInspection: WAVInspection
     let originalAttributes: S9SampleAttributes
     let workspace: TemporaryWorkspace
-    @Published var isReplacing = false
+    @Published var isSaving = false
     @Published var errorMessage: String?
 
     init(
@@ -59,6 +59,13 @@ private struct ImageUndoSnapshot {
     let volumePath: String
     let tagDocument: SharedTagDocument
     let actionName: String
+}
+
+private struct PreparedEditedS9 {
+    let data: Data
+    let inspection: WAVInspection
+    let stagedFilename: String
+    let stagedURL: URL
 }
 
 @MainActor
@@ -117,7 +124,7 @@ final class AppModel: ObservableObject {
     private let volumeCoordination = VolumeCoordinationCenter(appName: "EDIT950")
     private var imageVolumeUseLease: VolumeUseLease?
     private var currentOperationTask: Task<Void, Never>?
-    private var recentURLs: [URL] = []
+    @Published private var recentURLs: [URL] = []
     private var keygroupTransferWorkspace: TemporaryWorkspace?
     private var selectionAnchor: AkaiFile.ID?
     private let sampleAudition = SampleLoopAuditionController()
@@ -132,6 +139,7 @@ final class AppModel: ObservableObject {
 #if AKAI_TESTING
     var overwriteVerificationMutator: ((Data) -> Data)?
     var s9ReplacementVerificationMutator: ((Data) -> Data)?
+    var s9CreationAvailableBytesOverride: Int64?
 #endif
 
     init(settings: AppSettings, tagLibraryDirectoryOverride: URL? = nil) {
@@ -491,14 +499,36 @@ final class AppModel: ObservableObject {
             UTType(filenameExtension: "iso") ?? .data,
             .data
         ]
+        let readOnlyCheckbox = NSButton(checkboxWithTitle: "Open image read-only", target: nil, action: nil)
+        readOnlyCheckbox.state = currentReadOnlyChoice ? .on : .off
+        readOnlyCheckbox.toolTip =
+            "Browse, audition and export without allowing changes to the IMG."
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 28))
+        readOnlyCheckbox.frame = NSRect(x: 0, y: 3, width: 300, height: 22)
+        accessory.addSubview(readOnlyCheckbox)
+        panel.accessoryView = accessory
+        panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, let url = panel.url else {
             diagnostics.record(.info, category: "ui", message: "Open IMG dialogue cancelled")
             return
         }
+        currentReadOnlyChoice = readOnlyCheckbox.state == .on
         start { try await self.openImage(url, readOnly: self.currentReadOnlyChoice) }
     }
 
     func openRecent(_ url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            recentURLs.removeAll {
+                $0.standardizedFileURL == url.standardizedFileURL
+            }
+            UserDefaults.standard.set(recentURLs.map(\.path), forKey: "recentImages")
+            reportError(
+                AppError.verificationFailed(
+                    "The recent IMG is no longer at \(url.path). Choose its new location with Open Image."
+                )
+            )
+            return
+        }
         diagnostics.record(
             .info,
             category: "ui",
@@ -1813,6 +1843,75 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func saveP9AsNewInImage(
+        _ document: P9EditorDocument,
+        requestedName: String
+    ) {
+        start {
+            document.isCreatingInImage = true
+            document.createErrorMessage = nil
+            defer {
+                document.isCreatingInImage = false
+                self.progress = nil
+            }
+            do {
+                try await self.performSaveP9AsNewInImage(
+                    document,
+                    requestedName: requestedName
+                )
+            } catch {
+                document.createErrorMessage =
+                    (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                if self.settings.autoOpenLogOnError {
+                    self.isLogVisible = true
+                }
+            }
+        }
+    }
+
+    func performSaveP9AsNewInImage(
+        _ document: P9EditorDocument,
+        requestedName: String
+    ) async throws {
+        guard case .image(
+            _,
+            let sourceImageURL,
+            let sourceVolumePath
+        ) = document.source else {
+            throw AppError.verificationFailed(
+                "Save As New in IMG is available only for a P9 opened from an IMG."
+            )
+        }
+        guard document.hasChanges else {
+            throw AppError.verificationFailed(
+                "Edit the program before saving a new P9 copy."
+            )
+        }
+        let identity = try P9CanonicalName.resolve(
+            requestedName,
+            existingFilenames: existingP9Filenames
+        )
+        var copiedProgram = document.program
+        copiedProgram.name = identity.base
+        let copiedData = try copiedProgram.encoded()
+        let copyDocument = try P9EditorDocument(
+            data: copiedData,
+            source: .newImageProgram(
+                filename: identity.filename,
+                imageURL: sourceImageURL,
+                volumePath: sourceVolumePath
+            )
+        )
+        try await performCreateP9InImage(copyDocument)
+        try document.markSavedAsNewInImage(
+            filename: identity.filename,
+            imageURL: sourceImageURL,
+            volumePath: sourceVolumePath,
+            data: copyDocument.originalData
+        )
+    }
+
     func performCreateP9InImage(_ document: P9EditorDocument) async throws {
         guard case .newImageProgram(
             let sourceFilename,
@@ -1980,7 +2079,11 @@ final class AppModel: ObservableObject {
         _ document: P9EditorDocument,
         createBackup: Bool = true
     ) async throws -> P9OverwriteResult {
-        guard case .image(let sourceFilename, let sourceImageURL) = document.source
+        guard case .image(
+            let sourceFilename,
+            let sourceImageURL,
+            let sourceVolumePath
+        ) = document.source
         else {
             throw AppError.verificationFailed(
                 "Overwrite is available only for a P9 opened from an IMG."
@@ -1989,10 +2092,11 @@ final class AppModel: ObservableObject {
         guard let activeSession = session else { throw AppError.noImageOpen }
         guard !activeSession.readOnly else { throw AppError.readOnly }
         guard activeSession.imageURL.standardizedFileURL
-                == sourceImageURL.standardizedFileURL
+                == sourceImageURL.standardizedFileURL,
+              snapshot.currentPath == sourceVolumePath
         else {
             throw AppError.verificationFailed(
-                "The exact source IMG is no longer open. Reopen this P9 before overwriting."
+                "The exact source IMG volume is no longer open. Return to that volume before overwriting this P9."
             )
         }
         guard document.pendingKeygroupPaste == nil,
@@ -2069,7 +2173,9 @@ final class AppModel: ObservableObject {
             mutationStarted = true
             _ = try await run(try AkaiCommandBuilder.delete(index: currentFile.index))
             _ = try await run(
-                try AkaiCommandBuilder.importNative(filename: stagedFilename)
+                try AkaiCommandBuilder.importNative(
+                    filename: stagedFilename
+                )
             )
 
             updateProgress(3, detail: "Re-reading the destination volume")
@@ -2341,7 +2447,8 @@ final class AppModel: ObservableObject {
                 data: data,
                 source: .image(
                     filename: file.name,
-                    imageURL: session.imageURL
+                    imageURL: session.imageURL,
+                    volumePath: self.snapshot.currentPath
                 )
             )
             self.progress = nil
@@ -3680,7 +3787,7 @@ final class AppModel: ObservableObject {
     }
 
     func cancelExternalSampleEdit(_ editSession: ExternalSampleEditSession) {
-        guard !editSession.isReplacing else { return }
+        guard !editSession.isSaving else { return }
         diagnostics.record(
             .info,
             category: "sample-edit",
@@ -3710,6 +3817,42 @@ final class AppModel: ObservableObject {
         bandwidthConversion: S950BandwidthConversion? = nil,
         onSuccess: @escaping @MainActor () -> Void = {}
     ) {
+        do {
+            guard try editedS9HasChanges(
+                editSession,
+                attributes: attributes,
+                loopPoints: loopPoints,
+                bandwidthConversion: bandwidthConversion
+            ) else {
+                diagnostics.record(
+                    .info,
+                    category: "sample-edit",
+                    message: "Sample replacement skipped because nothing changed",
+                    fields: [
+                        "sample": editSession.sourceFile.name,
+                        "session": editSession.id.uuidString
+                    ]
+                )
+                onSuccess()
+                if externalSampleEditSession?.id == editSession.id {
+                    externalSampleEditSession = nil
+                }
+                editSession.removeWorkspace()
+                publishSuccess(
+                    title: "Nothing Changed",
+                    lines: [
+                        "(editSession.sourceFile.name) was not edited, so nothing was written to the IMG."
+                    ],
+                    systemImage: "checkmark.circle"
+                )
+                return
+            }
+        } catch {
+            editSession.errorMessage =
+                (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return
+        }
         diagnostics.record(
             .info,
             category: "sample-edit",
@@ -3726,10 +3869,10 @@ final class AppModel: ObservableObject {
             ]
         )
         start {
-            editSession.isReplacing = true
+            editSession.isSaving = true
             editSession.errorMessage = nil
             defer {
-                editSession.isReplacing = false
+                editSession.isSaving = false
                 self.progress = nil
             }
             do {
@@ -3741,7 +3884,7 @@ final class AppModel: ObservableObject {
                     loopPoints: loopPoints,
                     bandwidthConversion: bandwidthConversion
                 )
-                editSession.isReplacing = false
+                editSession.isSaving = false
                 self.progress = nil
                 await Task.yield()
                 self.diagnostics.record(
@@ -3788,6 +3931,335 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func saveEditedS9SampleAsNew(
+        _ editSession: ExternalSampleEditSession,
+        requestedName: String,
+        compressed: Bool,
+        createBackup: Bool,
+        attributes: S9SampleEditSettings,
+        loopPoints: S9LoopPoints? = nil,
+        bandwidthConversion: S950BandwidthConversion? = nil,
+        onSuccess: @escaping @MainActor () -> Void = {}
+    ) {
+        diagnostics.record(
+            .info,
+            category: "sample-edit",
+            message: "Save edited sample as new requested",
+            fields: [
+                "sourceSample": editSession.sourceFile.name,
+                "requestedName": requestedName,
+                "session": editSession.id.uuidString,
+                "backup": String(createBackup),
+                "compressed": String(compressed),
+                "playbackMode": attributes.playbackMode.title,
+                "loopStart": loopPoints.map { String($0.start) } ?? "none",
+                "loopEnd": loopPoints.map { String($0.end) } ?? "none",
+                "bandwidthConversion": String(bandwidthConversion != nil)
+            ]
+        )
+        start {
+            editSession.isSaving = true
+            editSession.errorMessage = nil
+            defer {
+                editSession.isSaving = false
+                self.progress = nil
+            }
+            do {
+                let result = try await self.performEditedS9Creation(
+                    editSession,
+                    requestedName: requestedName,
+                    compressed: compressed,
+                    createBackup: createBackup,
+                    attributes: attributes,
+                    loopPoints: loopPoints,
+                    bandwidthConversion: bandwidthConversion
+                )
+                editSession.isSaving = false
+                self.progress = nil
+                await Task.yield()
+                self.diagnostics.record(
+                    .info,
+                    category: "sample-edit",
+                    message: "New sample verified; dismissing sample editor",
+                    fields: [
+                        "sourceSample": editSession.sourceFile.name,
+                        "newSample": result.filename,
+                        "session": editSession.id.uuidString
+                    ]
+                )
+                onSuccess()
+                if self.externalSampleEditSession?.id == editSession.id {
+                    self.externalSampleEditSession = nil
+                }
+                editSession.removeWorkspace()
+            } catch {
+                editSession.errorMessage =
+                    (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                self.diagnostics.record(
+                    .error,
+                    category: "sample-edit",
+                    message: "Save edited sample as new failed",
+                    fields: [
+                        "sourceSample": editSession.sourceFile.name,
+                        "requestedName": requestedName,
+                        "session": editSession.id.uuidString,
+                        "error": editSession.errorMessage ?? "Unknown error"
+                    ]
+                )
+                if self.settings.autoOpenLogOnError {
+                    self.isLogVisible = true
+                }
+            }
+        }
+    }
+
+    func performEditedS9Creation(
+        _ editSession: ExternalSampleEditSession,
+        requestedName: String,
+        compressed: Bool,
+        createBackup: Bool = true,
+        attributes: S9SampleEditSettings? = nil,
+        loopPoints: S9LoopPoints? = nil,
+        bandwidthConversion: S950BandwidthConversion? = nil
+    ) async throws -> S9CreationResult {
+        guard let activeSession = session else { throw AppError.noImageOpen }
+        guard !activeSession.readOnly else { throw AppError.readOnly }
+        guard activeSession.imageURL.standardizedFileURL
+                == editSession.imageURL.standardizedFileURL,
+              snapshot.currentPath == editSession.volumePath
+        else {
+            throw AppError.verificationFailed(
+                "The exact source IMG and volume are no longer open. "
+                    + "Reopen the original sample before saving a new one."
+            )
+        }
+        guard isS900Volume else {
+            throw AppError.verificationFailed(
+                "The open volume is not an S950 volume."
+            )
+        }
+        let stagedBase = try AkaiFilename.validatedS950Base(requestedName)
+        let newSampleBase = stagedBase.replacingOccurrences(of: "_", with: " ")
+        let originalSampleBase = editSession.sampleBaseName
+        guard Self.normalizedSampleKey(newSampleBase)
+                != Self.normalizedSampleKey(originalSampleBase)
+        else {
+            throw AppError.verificationFailed(
+                "Enter a different name so the original sample can be preserved."
+            )
+        }
+        guard sampleFile(matchingP9Name: newSampleBase) == nil else {
+            throw AppError.verificationFailed(
+                "\(stagedBase).S9 already exists in this volume."
+            )
+        }
+        guard let originalFile = sampleFile(
+            matchingP9Name: originalSampleBase
+        ) else {
+            throw AppError.verificationFailed(
+                "\(editSession.sourceFile.name) is no longer present in the source volume."
+            )
+        }
+        if let maximumFileCount = snapshot.maximumFileCount,
+           snapshot.fileCount >= maximumFileCount {
+            throw AppError.verificationFailed(
+                "The S950 volume directory is full. Delete a file before saving a new sample."
+            )
+        }
+        let rateChanged = try validateEditedS9Changes(
+            editSession,
+            attributes: attributes,
+            loopPoints: loopPoints,
+            bandwidthConversion: bandwidthConversion
+        )
+
+        progress = OperationProgress(
+            kind: .editingSample,
+            current: 0,
+            total: 10,
+            detail: "Inspecting edited WAV"
+        )
+        let prepared = try await prepareEditedS9(
+            editSession,
+            sampleBase: newSampleBase,
+            compressed: compressed,
+            attributes: attributes,
+            loopPoints: loopPoints,
+            bandwidthConversion: bandwidthConversion,
+            rateChanged: rateChanged
+        )
+        var availableBytes = snapshot.freeBytes
+#if AKAI_TESTING
+        availableBytes = s9CreationAvailableBytesOverride ?? availableBytes
+#endif
+        if availableBytes > 0,
+           Int64(prepared.data.count) > availableBytes {
+            throw AppError.insufficientSpace(
+                required: Int64(prepared.data.count),
+                available: availableBytes
+            )
+        }
+
+        updateProgress(3, detail: "Reading the original sample for preservation")
+        let originalData = try await exportNativeFileData(originalFile)
+        updateProgress(4, detail: "Closing the IMG safely")
+        await controller.close()
+        let backupURL: URL?
+        do {
+            if createBackup {
+                updateProgress(
+                    5,
+                    detail: "Creating and verifying a complete IMG backup"
+                )
+                backupURL = try createTimestampedBackup(
+                    of: activeSession.imageURL
+                )
+            } else {
+                updateProgress(5, detail: "Continuing without an IMG backup")
+                backupURL = nil
+            }
+            try await reopenImageSession(activeSession)
+        } catch {
+            try? await reopenImageSession(activeSession)
+            throw error
+        }
+
+        var mutationStarted = false
+        do {
+            guard sampleFile(matchingP9Name: originalSampleBase) != nil else {
+                throw AppError.verificationFailed(
+                    "\(originalFile.name) disappeared before the new sample was saved."
+                )
+            }
+            guard sampleFile(matchingP9Name: newSampleBase) == nil else {
+                throw AppError.verificationFailed(
+                    "\(stagedBase).S9 appeared before the new sample was saved."
+                )
+            }
+
+            updateProgress(6, detail: "Saving \(stagedBase).S9 as a new sample")
+            _ = try await run(
+                try AkaiCommandBuilder.localDirectory(
+                    editSession.workspace.url.path
+                )
+            )
+            mutationStarted = true
+            _ = try await run(
+                try AkaiCommandBuilder.importNative(
+                    filename: prepared.stagedFilename
+                )
+            )
+
+            updateProgress(7, detail: "Re-reading the destination volume")
+            try await refresh()
+            guard let storedOriginal = sampleFile(
+                matchingP9Name: originalSampleBase
+            ),
+                  let storedNewSample = sampleFile(
+                    matchingP9Name: newSampleBase
+                  ),
+                  storedOriginal.id != storedNewSample.id
+            else {
+                throw AppError.verificationFailed(
+                    "AKAI Util did not store \(stagedBase).S9 beside the original sample."
+                )
+            }
+            try FileManager.default.removeItem(at: prepared.stagedURL)
+
+            updateProgress(8, detail: "Verifying the new native S9 bytes")
+            let exportedNewData = try await exportNativeFileData(storedNewSample)
+            var verifiedNewData = exportedNewData
+#if AKAI_TESTING
+            verifiedNewData = s9ReplacementVerificationMutator?(exportedNewData)
+                ?? exportedNewData
+#endif
+            guard verifiedNewData == prepared.data else {
+                throw AppError.verificationFailed(
+                    "The new S9 exported from the IMG differs from the prepared sample. "
+                        + Self.nativeDataDifferenceSummary(
+                            expected: prepared.data,
+                            actual: verifiedNewData
+                        )
+                )
+            }
+
+            updateProgress(9, detail: "Verifying the original sample is unchanged")
+            let verifiedOriginalData = try await exportNativeFileData(
+                storedOriginal
+            )
+            guard verifiedOriginalData == originalData else {
+                throw AppError.verificationFailed(
+                    "The original S9 changed while the edited sample was saved as new."
+                )
+            }
+
+            updateProgress(10, detail: "New sample and original verified")
+            do {
+                try await cacheSampleForAudition(storedNewSample)
+            } catch {
+                let key = sampleCacheKey(for: storedNewSample)
+                loadingSampleCacheKeys.remove(key)
+                sampleCacheErrors[key] =
+                    (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+            }
+            var successLines = [
+                "\(storedNewSample.name) was saved and verified byte-for-byte.",
+                "\(storedOriginal.name) and its existing P9 references were preserved."
+            ]
+            if let backupURL {
+                successLines.append("Backup: \(backupURL.path)")
+            } else {
+                successLines.append("No IMG backup was created.")
+            }
+            selection = [storedNewSample.id]
+            selectionAnchor = storedNewSample.id
+            publishSuccess(
+                title: "New S9 Sample Saved and Verified",
+                lines: successLines
+            )
+            return S9CreationResult(
+                filename: storedNewSample.name,
+                originalFilename: storedOriginal.name,
+                backupURL: backupURL,
+                verifiedByteCount: verifiedNewData.count,
+                wavInspection: prepared.inspection
+            )
+        } catch {
+            guard mutationStarted else { throw error }
+            let originalMessage =
+                (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            guard let backupURL else {
+                try? await refresh()
+                throw AppError.verificationFailed(
+                    "The new S9 could not be verified and no IMG backup was created, so automatic rollback is unavailable. Check the IMG and remove the incomplete new sample if it is present. Cause: \(originalMessage)"
+                )
+            }
+            do {
+                try await restoreImageSession(activeSession, from: backupURL)
+            } catch {
+                let rollbackMessage =
+                    (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                session = nil
+                snapshot = DiskSnapshot()
+                selection.removeAll()
+                throw AppError.verificationFailed(
+                    "Saving the new S9 failed and automatic IMG restoration also failed. "
+                        + "Do not use the destination IMG. Restore it manually from "
+                        + "\(backupURL.path). Save error: \(originalMessage) "
+                        + "Restoration error: \(rollbackMessage)"
+                )
+            }
+            throw AppError.verificationFailed(
+                "The new S9 was not saved. The original IMG was restored and verified "
+                    + "from \(backupURL.lastPathComponent). Cause: \(originalMessage)"
+            )
+        }
+    }
+
     func performEditedS9Replacement(
         _ editSession: ExternalSampleEditSession,
         compressed: Bool,
@@ -3812,26 +4284,12 @@ final class AppModel: ObservableObject {
                 "The open volume is not an S950 volume."
             )
         }
-        let editedWAVData = try Data(contentsOf: editSession.wavURL)
-        let audioOrMetadataChanged = editedWAVData != editSession.originalWAVData
-        let attributesChanged = attributes.map {
-            $0.rootNote != editSession.originalAttributes.rootNote
-                || $0.playbackMode != editSession.originalAttributes.playbackMode
-                || $0.playbackDirection
-                    != editSession.originalAttributes.playbackDirection
-        } ?? false
-        let loopPointsChanged = loopPoints.map {
-            $0.start != editSession.originalAttributes.loopStart
-                || $0.end != editSession.originalAttributes.playbackEnd
-        } ?? false
-        let rateChanged = bandwidthConversion.map {
-            $0.sampleRate != Int(editSession.originalInspection.sampleRate.rounded())
-        } ?? false
-        guard audioOrMetadataChanged || attributesChanged || loopPointsChanged || rateChanged else {
-            throw AppError.verificationFailed(
-                "The WAV and S9 attributes have not changed. Save an audio edit or change an attribute first."
-            )
-        }
+        let rateChanged = try validateEditedS9Changes(
+            editSession,
+            attributes: attributes,
+            loopPoints: loopPoints,
+            bandwidthConversion: bandwidthConversion
+        )
         let sampleBase = editSession.sampleBaseName
         guard let originalFile = sampleFile(matchingP9Name: sampleBase) else {
             throw AppError.verificationFailed(
@@ -3845,93 +4303,21 @@ final class AppModel: ObservableObject {
             total: 8,
             detail: "Inspecting edited WAV"
         )
-        var replacementWAV = editSession.wavURL
-        var scaledLoopPoints = loopPoints
-        if let bandwidthConversion, rateChanged {
-            let resampledURL = editSession.workspace.url.appendingPathComponent("bandwidth-converted.wav")
-            _ = try WAVService.resampleS950(editSession.wavURL, to: resampledURL, conversion: bandwidthConversion)
-            let ratio = Double(bandwidthConversion.sampleRate) / editSession.originalInspection.sampleRate
-            let nativeLoopPoints: S9LoopPoints? = loopPoints ?? {
-                guard attributes?.playbackMode.requiresLoopMarkers == true,
-                      let start = editSession.originalAttributes.loopStart
-                else { return nil }
-                return S9LoopPoints(
-                    start: start,
-                    end: editSession.originalAttributes.playbackEnd
-                )
-            }()
-            scaledLoopPoints = nativeLoopPoints.map {
-                S9LoopPoints(
-                    start: UInt32((Double($0.start) * ratio).rounded()),
-                    end: UInt32((Double($0.end) * ratio).rounded())
-                )
-            }
-            replacementWAV = resampledURL
-            updateProgress(1, detail: "Resampled at \(bandwidthConversion.sampleRate) samples/sec")
-        }
-        let prepared = try await prepareNativeS9Replacement(
-            from: replacementWAV,
+        let prepared = try await prepareEditedS9(
+            editSession,
             sampleBase: sampleBase,
-            compressed: compressed
+            compressed: compressed,
+            attributes: attributes,
+            loopPoints: loopPoints,
+            bandwidthConversion: bandwidthConversion,
+            rateChanged: rateChanged
         )
-        updateProgress(2, detail: "Prepared native \(sampleBase).S9")
-        let stagedBase = AkaiFilename.sanitizedBase(
-            sampleBase,
-            family: .s900,
-            maximumLength: 10
-        )
-        let stagedFilename = "\(stagedBase).S9"
-        let stagedURL = editSession.workspace.url.appendingPathComponent(stagedFilename)
-        var preparedData = prepared.data
-        if let attributes {
-            let cueSampleOffsets = try WAVService.cueSampleOffsets(
-                in: replacementWAV
-            )
-            preparedData = try S9NativeSample.applying(
-                attributes,
-                cueSampleOffsets: cueSampleOffsets,
-                editedWAVFrameCount: prepared.inspection.frameCount,
-                to: preparedData,
-                retainedFinePitchSixteenths:
-                    editSession.originalAttributes.finePitchSixteenths,
-                explicitLoopPoints: scaledLoopPoints
-            )
-        }
-        preparedData = try S9NativeSample.renamingInternalName(
-            in: preparedData,
-            to: sampleBase
-        )
-        if let attributes {
-            let stagedAttributes = try S9NativeSample.attributes(in: preparedData)
-            guard stagedAttributes.playbackMode == attributes.playbackMode else {
-                throw AppError.verificationFailed(
-                    "The staged S9 did not retain the selected playback mode."
-                )
-            }
-            if attributes.playbackMode.requiresLoopMarkers {
-                guard stagedAttributes.loopStart != nil,
-                      stagedAttributes.loopStart! < stagedAttributes.playbackEnd
-                else {
-                    throw AppError.verificationFailed(
-                        "The staged S9 did not retain valid loop points."
-                    )
-                }
-            }
-        }
-        try preparedData.write(to: stagedURL, options: .atomic)
-        guard Self.normalizedSampleKey(
-            try S9NativeSample.internalName(in: preparedData)
-        ) == Self.normalizedSampleKey(sampleBase) else {
-            throw AppError.verificationFailed(
-                "The prepared S9 internal sample name does not match \(sampleBase)."
-            )
-        }
         let availableAfterRemovingOriginal =
             snapshot.freeBytes + max(0, originalFile.byteSize)
         if snapshot.freeBytes > 0,
-           Int64(preparedData.count) > availableAfterRemovingOriginal {
+           Int64(prepared.data.count) > availableAfterRemovingOriginal {
             throw AppError.insufficientSpace(
-                required: Int64(preparedData.count),
+                required: Int64(prepared.data.count),
                 available: availableAfterRemovingOriginal
             )
         }
@@ -3969,7 +4355,9 @@ final class AppModel: ObservableObject {
             mutationStarted = true
             _ = try await run(try AkaiCommandBuilder.delete(index: currentFile.index))
             _ = try await run(
-                try AkaiCommandBuilder.importNative(filename: stagedFilename)
+                try AkaiCommandBuilder.importNative(
+                    filename: prepared.stagedFilename
+                )
             )
             try await refresh()
             guard let storedFile = sampleFile(matchingP9Name: sampleBase) else {
@@ -3978,7 +4366,7 @@ final class AppModel: ObservableObject {
                 )
             }
 
-            try FileManager.default.removeItem(at: stagedURL)
+            try FileManager.default.removeItem(at: prepared.stagedURL)
             let filesBeforeVerification = Set(
                 try FileManager.default.contentsOfDirectory(
                     at: editSession.workspace.url,
@@ -4003,7 +4391,7 @@ final class AppModel: ObservableObject {
             }
             let normalizedExport = try NativeAkaiFileExport.normalizeExportedFile(
                 exported,
-                expectedFilename: stagedFilename
+                expectedFilename: prepared.stagedFilename
             )
             let exportedData = try Data(contentsOf: normalizedExport)
             var verifiedData = exportedData
@@ -4012,11 +4400,11 @@ final class AppModel: ObservableObject {
                 ?? exportedData
 #endif
             updateProgress(7, detail: "Comparing native S9 bytes")
-            guard verifiedData == preparedData else {
+            guard verifiedData == prepared.data else {
                 throw AppError.verificationFailed(
                     "The S9 exported from the IMG differs from the prepared replacement. "
                         + Self.nativeDataDifferenceSummary(
-                            expected: preparedData,
+                            expected: prepared.data,
                             actual: verifiedData
                         )
                 )
@@ -4091,32 +4479,186 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func validateEditedS9Changes(
+        _ editSession: ExternalSampleEditSession,
+        attributes: S9SampleEditSettings?,
+        loopPoints: S9LoopPoints?,
+        bandwidthConversion: S950BandwidthConversion?
+    ) throws -> Bool {
+        guard try editedS9HasChanges(
+            editSession,
+            attributes: attributes,
+            loopPoints: loopPoints,
+            bandwidthConversion: bandwidthConversion
+        ) else {
+            throw AppError.verificationFailed(
+                "The WAV and S9 attributes have not changed. Save an audio edit or change an attribute first."
+            )
+        }
+        return bandwidthConversion.map {
+            $0.sampleRate
+                != Int(editSession.originalInspection.sampleRate.rounded())
+        } ?? false
+    }
+
+    func editedS9HasChanges(
+        _ editSession: ExternalSampleEditSession,
+        attributes: S9SampleEditSettings?,
+        loopPoints: S9LoopPoints?,
+        bandwidthConversion: S950BandwidthConversion?
+    ) throws -> Bool {
+        let editedWAVData = try Data(contentsOf: editSession.wavURL)
+        let audioOrMetadataChanged =
+            editedWAVData != editSession.originalWAVData
+        let attributesChanged = attributes.map {
+            $0.rootNote != editSession.originalAttributes.rootNote
+                || $0.playbackMode != editSession.originalAttributes.playbackMode
+                || $0.playbackDirection
+                    != editSession.originalAttributes.playbackDirection
+        } ?? false
+        let loopPointsChanged = loopPoints.map {
+            $0.start != editSession.originalAttributes.loopStart
+                || $0.end != editSession.originalAttributes.playbackEnd
+        } ?? false
+        let rateChanged = bandwidthConversion.map {
+            $0.sampleRate
+                != Int(editSession.originalInspection.sampleRate.rounded())
+        } ?? false
+        return audioOrMetadataChanged
+            || attributesChanged
+            || loopPointsChanged
+            || rateChanged
+    }
+
+    private func prepareEditedS9(
+        _ editSession: ExternalSampleEditSession,
+        sampleBase: String,
+        compressed: Bool,
+        attributes: S9SampleEditSettings?,
+        loopPoints: S9LoopPoints?,
+        bandwidthConversion: S950BandwidthConversion?,
+        rateChanged: Bool
+    ) async throws -> PreparedEditedS9 {
+        var editedWAV = editSession.wavURL
+        var scaledLoopPoints = loopPoints
+        if let bandwidthConversion, rateChanged {
+            let resampledURL = editSession.workspace.url.appendingPathComponent(
+                "bandwidth-converted.wav"
+            )
+            let resampledInspection = try WAVService.resampleS950(
+                editSession.wavURL,
+                to: resampledURL,
+                conversion: bandwidthConversion
+            )
+            let nativeLoopPoints: S9LoopPoints? = loopPoints ?? {
+                guard attributes?.playbackMode.requiresLoopMarkers == true,
+                      let start = editSession.originalAttributes.loopStart
+                else { return nil }
+                return S9LoopPoints(
+                    start: start,
+                    end: editSession.originalAttributes.playbackEnd
+                )
+            }()
+            if let nativeLoopPoints {
+                guard let convertedFrameCount = UInt32(
+                    exactly: resampledInspection.frameCount
+                ) else {
+                    throw AppError.verificationFailed(
+                        "The resampled WAV has an unsupported sample length."
+                    )
+                }
+                scaledLoopPoints = try nativeLoopPoints.scaled(
+                    fromSampleLength:
+                        editSession.originalAttributes.sampleLength,
+                    toSampleLength: convertedFrameCount
+                )
+            }
+            editedWAV = resampledURL
+            updateProgress(
+                1,
+                detail: "Resampled at \(bandwidthConversion.sampleRate) samples/sec"
+            )
+        }
+        let native = try await prepareNativeS9Replacement(
+            from: editedWAV,
+            sampleBase: sampleBase,
+            compressed: compressed
+        )
+        updateProgress(2, detail: "Prepared native \(sampleBase).S9")
+        let stagedBase = AkaiFilename.sanitizedBase(
+            sampleBase,
+            family: .s900,
+            maximumLength: 10
+        )
+        let stagedFilename = "\(stagedBase).S9"
+        let stagedURL = editSession.workspace.url.appendingPathComponent(
+            stagedFilename
+        )
+        var data = native.data
+        if let attributes {
+            let cueSampleOffsets = try WAVService.cueSampleOffsets(in: editedWAV)
+            data = try S9NativeSample.applying(
+                attributes,
+                cueSampleOffsets: cueSampleOffsets,
+                editedWAVFrameCount: native.inspection.frameCount,
+                to: data,
+                retainedFinePitchSixteenths:
+                    editSession.originalAttributes.finePitchSixteenths,
+                explicitLoopPoints: scaledLoopPoints
+            )
+        }
+        data = try S9NativeSample.renamingInternalName(
+            in: data,
+            to: sampleBase
+        )
+        if let attributes {
+            let stagedAttributes = try S9NativeSample.attributes(in: data)
+            guard stagedAttributes.playbackMode == attributes.playbackMode else {
+                throw AppError.verificationFailed(
+                    "The staged S9 did not retain the selected playback mode."
+                )
+            }
+            if attributes.playbackMode.requiresLoopMarkers {
+                guard stagedAttributes.loopStart != nil,
+                      stagedAttributes.loopStart! < stagedAttributes.playbackEnd
+                else {
+                    throw AppError.verificationFailed(
+                        "The staged S9 did not retain valid loop points."
+                    )
+                }
+            }
+        }
+        try data.write(to: stagedURL, options: .atomic)
+        guard Self.normalizedSampleKey(
+            try S9NativeSample.internalName(in: data)
+        ) == Self.normalizedSampleKey(sampleBase) else {
+            throw AppError.verificationFailed(
+                "The prepared S9 internal sample name does not match \(sampleBase)."
+            )
+        }
+        return PreparedEditedS9(
+            data: data,
+            inspection: native.inspection,
+            stagedFilename: stagedFilename,
+            stagedURL: stagedURL
+        )
+    }
+
     private static func wavLoopMarkerOffsets(
         _ loopPoints: S9LoopPoints,
         nativeSampleLength: UInt32,
         wavFrameCount: Int64
     ) throws -> S9LoopPoints {
-        let points = try loopPoints.validated(
-            sampleLength: nativeSampleLength
-        )
         guard wavFrameCount > 0, wavFrameCount <= Int64(UInt32.max) else {
             throw AppError.verificationFailed(
                 "The temporary WAV has an unsupported sample length."
             )
         }
         let wavLength = UInt32(wavFrameCount)
-        func scaled(_ nativePosition: UInt32) -> UInt32 {
-            let position = Double(nativePosition)
-                * Double(wavLength)
-                / Double(nativeSampleLength)
-            return UInt32(
-                max(0, min(Int64(wavLength), Int64(position.rounded())))
-            )
-        }
-        return try S9LoopPoints(
-            start: scaled(points.start),
-            end: scaled(points.end)
-        ).validated(sampleLength: wavLength)
+        return try loopPoints.scaled(
+            fromSampleLength: nativeSampleLength,
+            toSampleLength: wavLength
+        )
     }
 
     private func openEditedWAV(

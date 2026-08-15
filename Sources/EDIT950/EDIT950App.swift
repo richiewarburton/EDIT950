@@ -38,6 +38,7 @@ struct EDIT950App: App {
                 .environmentObject(model)
                 .environmentObject(settings)
                 .environmentObject(suitePreferences)
+                .preferredColorScheme(suitePreferences.appearance.colorScheme)
                 .onAppear { model.undoManager = undoHistory.manager }
                 .suiteSurface()
                 .frame(minWidth: 880, minHeight: 520)
@@ -78,10 +79,6 @@ struct EDIT950App: App {
                         }
                     }
                 }
-                Toggle(
-                    "Open Images Read-Only",
-                    isOn: $model.currentReadOnlyChoice
-                )
                 Divider()
                 Button("Open S950 P9 Program…") { model.openP9EditorPanel() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -160,7 +157,27 @@ struct EDIT950App: App {
                     .keyboardShortcut(.delete, modifiers: [])
                     .disabled(!model.canMutate || model.selectedFiles.isEmpty)
             }
-            CommandMenu("Display") {
+            CommandGroup(after: .toolbar) {
+                Toggle(
+                    "Inspector",
+                    isOn: $suitePreferences.inspectorVisible
+                )
+                .keyboardShortcut("i", modifiers: [.command, .option])
+                Divider()
+                Menu("Appearance") {
+                    ForEach(SuiteAppearance.allCases) { appearance in
+                        Button {
+                            suitePreferences.appearance = appearance
+                        } label: {
+                            if suitePreferences.appearance == appearance {
+                                Label(appearance.title, systemImage: "checkmark")
+                            } else {
+                                Text(appearance.title)
+                            }
+                        }
+                    }
+                }
+                Divider()
                 Button("Zoom Out") { suitePreferences.zoomOut() }
                     .keyboardShortcut("-", modifiers: .command)
                     .disabled(suitePreferences.zoom == .fifty)
@@ -201,6 +218,7 @@ struct EDIT950App: App {
                 .environmentObject(settings)
                 .environmentObject(model)
                 .environmentObject(suitePreferences)
+                .preferredColorScheme(suitePreferences.appearance.colorScheme)
                 .suiteSurface()
                 .frame(width: 620, height: 560)
         }

@@ -38,6 +38,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
 
 if [ "$SELECTION_MODE" = "--all" ] \
     || [ "$SELECTION_MODE" = "--spread" ] \
+    || [ "$SELECTION_MODE" = "--image" ] \
     || [ "$SELECTION_MODE" = "--overwrite" ]; then
   "$BUILD_DIR/P9EditorVisualRunner" "$P9_PATH" "$SCREENSHOT_PATH" "$SELECTION_MODE"
 else

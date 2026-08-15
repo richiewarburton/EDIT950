@@ -2,6 +2,35 @@ import AppKit
 import Foundation
 import UniformTypeIdentifiers
 
+enum AkaiFileAssociation: String, CaseIterable, Hashable, Identifiable {
+    case img
+    case p9
+    case s9
+
+    var id: String { rawValue }
+    var filenameExtension: String { rawValue.uppercased() }
+
+    var title: String {
+        switch self {
+        case .img: "AKAI Disk Image"
+        case .p9: "S950 Program"
+        case .s9: "S950 Sample"
+        }
+    }
+
+    var typeIdentifier: String {
+        switch self {
+        case .img: "com.local.akai-disk-image"
+        case .p9: "com.local.akai-s950-program"
+        case .s9: "com.local.akai-s950-sample"
+        }
+    }
+
+    var contentType: UTType {
+        UTType(typeIdentifier)!
+    }
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     static let fullDiskAccessSettingsURL = URL(
@@ -35,6 +64,8 @@ final class AppSettings: ObservableObject {
         didSet { save() }
     }
     @Published var detectedVersion = "Not checked"
+    @Published private(set) var defaultFileAssociations: Set<AkaiFileAssociation> = []
+    @Published private(set) var isUpdatingFileAssociations = false
 
     private let defaults: UserDefaults
 
@@ -172,6 +203,50 @@ final class AppSettings: ObservableObject {
             return false
         }
         return FileManager.default.isExecutableFile(atPath: executableURL.path)
+    }
+
+    func refreshFileAssociations() {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            defaultFileAssociations = []
+            return
+        }
+        defaultFileAssociations = Set(AkaiFileAssociation.allCases.filter {
+            guard let applicationURL = NSWorkspace.shared.urlForApplication(
+                toOpen: $0.contentType
+            ) else {
+                return false
+            }
+            return Bundle(url: applicationURL)?.bundleIdentifier
+                == bundleIdentifier
+        })
+    }
+
+    func makeEDIT950Default(
+        for associations: [AkaiFileAssociation]
+    ) async throws {
+        guard !associations.isEmpty else { return }
+        isUpdatingFileAssociations = true
+        defer {
+            isUpdatingFileAssociations = false
+            refreshFileAssociations()
+        }
+
+        let applicationURL = Bundle.main.bundleURL
+        for association in associations {
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                NSWorkspace.shared.setDefaultApplication(
+                    at: applicationURL,
+                    toOpen: association.contentType
+                ) { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+        }
     }
 
     func restoreDefaults() {

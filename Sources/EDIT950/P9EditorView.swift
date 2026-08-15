@@ -2,11 +2,65 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+private struct P9KeygroupDropTarget: Equatable {
+    let index: Int
+    let insertAfter: Bool
+}
+
+private struct P9KeygroupDropDelegate: DropDelegate {
+    let targetIndex: Int
+    let reorderingDisabled: Bool
+    @Binding var draggedOffsets: IndexSet
+    @Binding var dropTarget: P9KeygroupDropTarget?
+    let move: (IndexSet, Int) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool {
+        !reorderingDisabled
+            && !draggedOffsets.isEmpty
+            && info.hasItemsConforming(to: [.plainText])
+    }
+
+    func dropEntered(info: DropInfo) {
+        updateTarget(for: info)
+    }
+
+    func dropExited(info: DropInfo) {
+        if dropTarget?.index == targetIndex {
+            dropTarget = nil
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard validateDrop(info: info) else { return nil }
+        updateTarget(for: info)
+        return DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        guard validateDrop(info: info) else { return false }
+        let insertAfter = info.location.y >= 17
+        let destination = targetIndex + (insertAfter ? 1 : 0)
+        let offsets = draggedOffsets
+        draggedOffsets = []
+        dropTarget = nil
+        move(offsets, destination)
+        return true
+    }
+
+    private func updateTarget(for info: DropInfo) {
+        guard validateDrop(info: info) else { return }
+        dropTarget = P9KeygroupDropTarget(
+            index: targetIndex,
+            insertAfter: info.location.y >= 17
+        )
+    }
+}
+
 @MainActor
 final class P9EditorDocument: ObservableObject, Identifiable {
     enum Source {
         case local(URL)
-        case image(filename: String, imageURL: URL)
+        case image(filename: String, imageURL: URL, volumePath: String)
         case newImageProgram(
             filename: String,
             imageURL: URL,
@@ -16,7 +70,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         var filename: String {
             switch self {
             case .local(let url): return url.lastPathComponent
-            case .image(let filename, _),
+            case .image(let filename, _, _),
                  .newImageProgram(let filename, _, _):
                 return filename
             }
@@ -25,17 +79,20 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         var imageURL: URL? {
             switch self {
             case .local: return nil
-            case .image(_, let imageURL),
+            case .image(_, let imageURL, _),
                  .newImageProgram(_, let imageURL, _):
                 return imageURL
             }
         }
 
         var volumePath: String? {
-            if case .newImageProgram(_, _, let volumePath) = self {
+            switch self {
+            case .image(_, _, let volumePath),
+                 .newImageProgram(_, _, let volumePath):
                 return volumePath
+            case .local:
+                return nil
             }
-            return nil
         }
 
         var isExistingImageProgram: Bool {
@@ -52,7 +109,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
             switch self {
             case .local(let url):
                 return url.deletingLastPathComponent().path
-            case .image(_, let imageURL):
+            case .image(_, let imageURL, _):
                 return "From \(imageURL.lastPathComponent); edits remain in memory until saved or overwritten"
             case .newImageProgram(_, let imageURL, _):
                 return "New program for \(imageURL.lastPathComponent); create it in the IMG when ready"
@@ -148,7 +205,11 @@ final class P9EditorDocument: ObservableObject, Identifiable {
     }
 
     func markCreatedInImage(with data: Data) throws {
-        guard case .newImageProgram(let filename, let imageURL, _) = source else {
+        guard case .newImageProgram(
+            let filename,
+            let imageURL,
+            let volumePath
+        ) = source else {
             throw AppError.verificationFailed(
                 "Only a new P9 can be marked as created in an IMG."
             )
@@ -159,8 +220,37 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         )
         originalData = data
         lastSavedData = nil
-        source = .image(filename: filename, imageURL: imageURL)
+        source = .image(
+            filename: filename,
+            imageURL: imageURL,
+            volumePath: volumePath
+        )
         createMessage = "\(filename) created and byte-verified in the IMG."
+    }
+
+    func markSavedAsNewInImage(
+        filename: String,
+        imageURL: URL,
+        volumePath: String,
+        data: Data
+    ) throws {
+        guard source.isExistingImageProgram else {
+            throw AppError.verificationFailed(
+                "Save As New in IMG is available only for a P9 opened from an IMG."
+            )
+        }
+        replaceProgram(
+            with: try P9Program(data: data),
+            refreshEditor: true
+        )
+        originalData = data
+        lastSavedData = nil
+        source = .image(
+            filename: filename,
+            imageURL: imageURL,
+            volumePath: volumePath
+        )
+        createMessage = "\(filename) saved as new and byte-verified in the IMG."
     }
 
     func stageKeygroupPaste(
@@ -226,17 +316,29 @@ final class P9EditorDocument: ObservableObject, Identifiable {
 }
 
 struct P9EditorSheet: View {
+    static let baseSize = CGSize(width: 1240, height: 800)
+
+    static func presentationSize(for zoom: SuiteZoomLevel) -> CGSize {
+        let scale = CGFloat(zoom.rawValue)
+        return CGSize(
+            width: baseSize.width * scale,
+            height: baseSize.height * scale
+        )
+    }
+
     @ObservedObject var document: P9EditorDocument
     let keygroupTransfer: P9KeygroupTransfer?
     let onCopyKeygroups: ((P9Program, Set<Int>, P9EditorDocument.Source) -> Void)?
     let onPasteKeygroups: ((P9EditorDocument) -> Void)?
     let onOverwriteP9: ((P9EditorDocument, Bool) -> Void)?
+    let onSaveP9AsNewInImage: ((P9EditorDocument, String) -> Void)?
     let onCreateP9InImage: ((P9EditorDocument) -> Void)?
     let onChooseAbletonDrumRack: ((P9EditorDocument) -> Void)?
     let onImportAbletonDrumRack:
         ((AbletonDrumRackImportDraft, P9EditorDocument) -> Void)?
     let availableSampleNames: [String]
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var suitePreferences: SuitePreferences
     @State private var selection: Set<Int>
     @State private var bulkEdits = P9BulkEdits()
     @State private var pendingSelectionAfterBulkEdits: Set<Int>?
@@ -245,12 +347,16 @@ struct P9EditorSheet: View {
     @State private var loudSampleExpanded = false
     @State private var showSpreadSheet = false
     @State private var showOverwriteConfirmation = false
+    @State private var showSaveAsNewInImagePrompt = false
     @State private var createBackupBeforeOverwrite = true
     @State private var showCloseConfirmation = false
     @State private var spreadSettings = P9SpreadSettings()
     @State private var message: String?
     @State private var errorMessage: String?
     @State private var midiMonitoringEnabled = true
+    @State private var keygroupSelectionAnchor: Int?
+    @State private var draggedKeygroupOffsets = IndexSet()
+    @State private var keygroupDropTarget: P9KeygroupDropTarget?
     @StateObject private var midiMonitor = MIDIKeygroupMonitor()
 
     init(
@@ -263,6 +369,7 @@ struct P9EditorSheet: View {
         onCopyKeygroups: ((P9Program, Set<Int>, P9EditorDocument.Source) -> Void)? = nil,
         onPasteKeygroups: ((P9EditorDocument) -> Void)? = nil,
         onOverwriteP9: ((P9EditorDocument, Bool) -> Void)? = nil,
+        onSaveP9AsNewInImage: ((P9EditorDocument, String) -> Void)? = nil,
         onCreateP9InImage: ((P9EditorDocument) -> Void)? = nil,
         onChooseAbletonDrumRack: ((P9EditorDocument) -> Void)? = nil,
         onImportAbletonDrumRack:
@@ -273,6 +380,7 @@ struct P9EditorSheet: View {
         self.onCopyKeygroups = onCopyKeygroups
         self.onPasteKeygroups = onPasteKeygroups
         self.onOverwriteP9 = onOverwriteP9
+        self.onSaveP9AsNewInImage = onSaveP9AsNewInImage
         self.onCreateP9InImage = onCreateP9InImage
         self.onChooseAbletonDrumRack = onChooseAbletonDrumRack
         self.onImportAbletonDrumRack = onImportAbletonDrumRack
@@ -325,7 +433,7 @@ struct P9EditorSheet: View {
             Divider()
             footer
         }
-        .frame(width: 1240, height: 800)
+        .frame(width: Self.baseSize.width, height: Self.baseSize.height)
         .background(Color.suiteBackground)
         .onChange(of: selection) { oldSelection, newSelection in
             if isRestoringSelection {
@@ -443,6 +551,14 @@ struct P9EditorSheet: View {
                 overwriteInImage(createBackup: createBackup)
             }
         }
+        .sheet(isPresented: $showSaveAsNewInImagePrompt) {
+            P9SaveAsNewInImageSheet(
+                sourceFilename: document.source.filename,
+                suggestedName: suggestedP9CopyName
+            ) { requestedName in
+                saveAsNewInImage(named: requestedName)
+            }
+        }
         .sheet(item: $document.abletonImportDraft) { draft in
             AbletonDrumRackImportSheet(draft: draft) { finalized in
                 onImportAbletonDrumRack?(finalized, document)
@@ -455,6 +571,20 @@ struct P9EditorSheet: View {
                 || document.isCreatingInImage
                 || document.isImportingDrumRack
         )
+        .scaleEffect(programEditorScale, anchor: .topLeading)
+        .frame(
+            width: programEditorPresentationSize.width,
+            height: programEditorPresentationSize.height,
+            alignment: .topLeading
+        )
+    }
+
+    private var programEditorScale: CGFloat {
+        CGFloat(suitePreferences.zoom.rawValue)
+    }
+
+    private var programEditorPresentationSize: CGSize {
+        Self.presentationSize(for: suitePreferences.zoom)
     }
 
     private var header: some View {
@@ -514,51 +644,119 @@ struct P9EditorSheet: View {
             .padding(.horizontal, 10)
             .padding(.top, 10)
 
-            List(document.program.keygroups, selection: $selection) { keygroup in
-                HStack {
-                    Circle()
-                        .fill(
-                            MIDIKeygroupTriggerMatcher.matches(
-                                keygroup,
-                                activeNotes: midiMonitor.activeNotes
-                            ) ? Color.suiteBlue : Color.clear
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(document.program.keygroups) { keygroup in
+                    let isSelected = selection.contains(keygroup.id)
+                    HStack {
+                        Circle()
+                            .fill(
+                                MIDIKeygroupTriggerMatcher.matches(
+                                    keygroup,
+                                    activeNotes: midiMonitor.activeNotes
+                                )
+                                    ? isSelected ? Color.suiteYellow : Color.suiteBlue
+                                    : Color.clear
+                            )
+                            .overlay(Circle().stroke(Color.suiteRule2))
+                            .frame(width: 7, height: 7)
+                        Text("\(keygroup.id + 1)")
+                            .font(SuiteFont.medium(11))
+                            .monospacedDigit()
+                            .frame(width: 32, alignment: .trailing)
+                            .foregroundStyle(
+                                isSelected ? Color.suiteOnBlue : Color.suiteLabel
+                            )
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(
+                                keygroup.softSampleName.isEmpty
+                                    ? "No soft sample"
+                                    : keygroup.softSampleName
+                            )
+                                .lineLimit(1)
+                                .foregroundStyle(
+                                    isSelected ? Color.suiteOnBlue : Color.primary
+                                )
+                            Text(keygroup.noteRangeWithMIDIDescription)
+                                .font(SuiteFont.medium(11))
+                                .foregroundStyle(
+                                    isSelected ? Color.suiteOnBlue : Color.suiteLabel
+                                )
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 4)
+                        Image(systemName: "line.3.horizontal")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(
+                                isSelected ? Color.suiteOnBlue : Color.suiteLabel
+                            )
+                            .help("Drag to reorder this keygroup")
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .contentShape(Rectangle())
+                    .background {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(
+                                isSelected
+                                    ? Color.suiteBlue
+                                    : MIDIKeygroupTriggerMatcher.matches(
+                                        keygroup,
+                                        activeNotes: midiMonitor.activeNotes
+                                    )
+                                        ? Color.suiteSlab3
+                                        : Color.clear
+                            )
+                            .padding(.horizontal, 8)
+                    }
+                    .overlay(alignment: keygroupDropTarget?.insertAfter == true ? .bottom : .top) {
+                        if keygroupDropTarget?.index == keygroup.id {
+                            Rectangle()
+                                .fill(Color.suiteBlue)
+                                .frame(height: 2)
+                                .padding(.horizontal, 8)
+                        }
+                    }
+                    .onTapGesture {
+                        selectKeygroup(
+                            keygroup.id,
+                            modifiers: NSEvent.modifierFlags
                         )
-                        .overlay(Circle().stroke(Color.suiteRule2))
-                        .frame(width: 7, height: 7)
-                    Text("\(keygroup.id + 1)")
-                        .monospacedDigit()
-                        .frame(width: 32, alignment: .trailing)
-                        .foregroundStyle(Color.suiteUnit)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(
-                            keygroup.softSampleName.isEmpty
-                                ? "No soft sample"
-                                : keygroup.softSampleName
+                    }
+                    .onDrag { beginKeygroupDrag(at: keygroup.id) }
+                    .onDrop(
+                        of: [.plainText],
+                        delegate: P9KeygroupDropDelegate(
+                            targetIndex: keygroup.id,
+                            reorderingDisabled: keygroupReorderingDisabled,
+                            draggedOffsets: $draggedKeygroupOffsets,
+                            dropTarget: $keygroupDropTarget,
+                            move: moveKeygroups
                         )
-                            .lineLimit(1)
-                        Text(keygroup.noteRangeDescription)
-                            .font(SuiteFont.regular(10))
-                            .foregroundStyle(Color.suiteUnit)
+                    )
+
+                        if keygroup.id < document.program.keygroups.count - 1 {
+                            Divider()
+                                .padding(.leading, 56)
+                                .padding(.trailing, 16)
+                        }
                     }
                 }
-                .tag(keygroup.id)
-                .listRowBackground(
-                    MIDIKeygroupTriggerMatcher.matches(
-                        keygroup,
-                        activeNotes: midiMonitor.activeNotes
-                    )
-                        ? Color.suiteSlab3
-                        : Color.clear
-                )
+                .padding(.vertical, 4)
             }
             .id(document.editorRevision)
+            .background(Color.suiteSlab)
 
             HStack {
                 Button {
                     addKeygroup()
                 } label: {
                     Image(systemName: "plus")
+                        .frame(width: 28, height: 18)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Add Keygroup")
                 .disabled(
                     document.program.keygroups.count >= 99
@@ -570,7 +768,10 @@ struct P9EditorSheet: View {
                     deleteSelectedKeygroups()
                 } label: {
                     Image(systemName: "minus")
+                        .frame(width: 28, height: 18)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
                 .accessibilityLabel("Delete Keygroups")
                 .disabled(
                     selection.isEmpty
@@ -777,6 +978,7 @@ struct P9EditorSheet: View {
             )
             Button("Close") { requestClose() }
                 .keyboardShortcut(.cancelAction)
+                .buttonStyle(SuiteSecondaryButtonStyle())
                 .disabled(
                     document.isPreparingKeygroupPaste
                         || document.isOverwritingInImage
@@ -790,6 +992,7 @@ struct P9EditorSheet: View {
                     .disabled(!canApply)
             }
             Button("Save Edited Copy…") { saveCopy() }
+                .buttonStyle(SuiteSecondaryButtonStyle())
                 .disabled(
                     document.pendingKeygroupPaste != nil
                         || document.isPreparingKeygroupPaste
@@ -806,15 +1009,27 @@ struct P9EditorSheet: View {
                 Button("Create in IMG…") {
                     createInImage()
                 }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
                 .disabled(!canCreateInImage)
                 .help(
                     "Import this new program into its source IMG and verify every P9 byte"
                 )
             }
             if document.source.isExistingImageProgram {
+                Button("Save as New in IMG…") {
+                    showSaveAsNewInImagePrompt = true
+                }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                .disabled(!canSaveAsNewInImage)
+                .help(
+                    document.pendingKeygroupPaste != nil
+                        ? "Apply the pasted keygroups before saving"
+                        : "Create and byte-verify a renamed copy in this IMG while preserving the original P9"
+                )
                 Button("Overwrite in IMG…") {
                     showOverwriteConfirmation = true
                 }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
                 .disabled(!canOverwriteInImage)
                 .help(
                     document.pendingKeygroupPaste != nil
@@ -882,6 +1097,17 @@ struct P9EditorSheet: View {
         onCreateP9InImage != nil
             && document.source.isNewImageProgram
             && !document.program.keygroups.isEmpty
+            && document.pendingKeygroupPaste == nil
+            && !document.isPreparingKeygroupPaste
+            && !document.isOverwritingInImage
+            && !document.isCreatingInImage
+            && !document.isImportingDrumRack
+    }
+
+    private var canSaveAsNewInImage: Bool {
+        onSaveP9AsNewInImage != nil
+            && document.source.isExistingImageProgram
+            && document.hasChanges
             && document.pendingKeygroupPaste == nil
             && !document.isPreparingKeygroupPaste
             && !document.isOverwritingInImage
@@ -993,6 +1219,81 @@ struct P9EditorSheet: View {
         }
     }
 
+    private var keygroupReorderingDisabled: Bool {
+        bulkEdits.hasChanges
+            || document.pendingKeygroupPaste != nil
+            || document.isPreparingKeygroupPaste
+            || document.isOverwritingInImage
+            || document.isCreatingInImage
+            || document.isImportingDrumRack
+    }
+
+    private func selectKeygroup(
+        _ index: Int,
+        modifiers: NSEvent.ModifierFlags
+    ) {
+        let modifiers = modifiers.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.command) {
+            if selection.contains(index) {
+                selection.remove(index)
+            } else {
+                selection.insert(index)
+            }
+            keygroupSelectionAnchor = index
+        } else if modifiers.contains(.shift) {
+            let anchor = keygroupSelectionAnchor
+                ?? selection.sorted().first
+                ?? index
+            selection = Set(min(anchor, index)...max(anchor, index))
+        } else {
+            selection = [index]
+            keygroupSelectionAnchor = index
+        }
+    }
+
+    private func beginKeygroupDrag(at index: Int) -> NSItemProvider {
+        guard !keygroupReorderingDisabled else { return NSItemProvider() }
+        if !selection.contains(index) {
+            selection = [index]
+            keygroupSelectionAnchor = index
+        }
+        draggedKeygroupOffsets = IndexSet(selection)
+        let provider = NSItemProvider(
+            object: "EDIT950 keygroup \(document.id.uuidString)" as NSString
+        )
+        provider.suggestedName = "EDIT950 Keygroup"
+        return provider
+    }
+
+    private func moveKeygroups(from offsets: IndexSet, to destination: Int) {
+        guard !keygroupReorderingDisabled else {
+            errorMessage = bulkEdits.hasChanges
+                ? "Apply or discard the current bulk edits before reordering keygroups."
+                : "Finish the current keygroup operation before reordering."
+            return
+        }
+        applyCurrentEdits(announce: false)
+        do {
+            var program = document.program
+            let indexMapping = try program.moveKeygroups(
+                fromOffsets: offsets,
+                toOffset: destination
+            )
+            let movedCount = offsets.count
+            let updatedSelection = Set(selection.compactMap { indexMapping[$0] })
+            document.replaceProgram(with: program, refreshEditor: true)
+            selection = updatedSelection
+            bulkEdits = P9BulkEdits()
+            message = movedCount == 1
+                ? "Reordered the keygroup."
+                : "Reordered \(movedCount) keygroups."
+        } catch {
+            errorMessage =
+                (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
     private func performSpread(_ settings: P9SpreadSettings) {
         do {
             var program = document.program
@@ -1041,6 +1342,20 @@ struct P9EditorSheet: View {
         applyCurrentEdits(announce: false)
         document.createMessage = nil
         onCreateP9InImage?(document)
+    }
+
+    private var suggestedP9CopyName: String {
+        let stem = (document.source.filename as NSString).deletingPathExtension
+        let suffix = "-COPY"
+        return String(stem.prefix(max(1, P9CanonicalName.maximumLength - suffix.count)))
+            + suffix
+    }
+
+    private func saveAsNewInImage(named requestedName: String) {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        applyCurrentEdits(announce: false)
+        document.createMessage = nil
+        onSaveP9AsNewInImage?(document, requestedName)
     }
 
     private func requestClose() {
@@ -1118,6 +1433,99 @@ private struct P9OverwriteConfirmationSheet: View {
         }
         .padding(22)
         .frame(width: 520)
+    }
+}
+
+private struct P9SaveAsNewInImageSheet: View {
+    let sourceFilename: String
+    let suggestedName: String
+    let onConfirm: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var requestedName: String
+
+    init(
+        sourceFilename: String,
+        suggestedName: String,
+        onConfirm: @escaping (String) -> Void
+    ) {
+        self.sourceFilename = sourceFilename
+        self.suggestedName = suggestedName
+        self.onConfirm = onConfirm
+        _requestedName = State(initialValue: suggestedName)
+    }
+
+    private var validationError: String? {
+        do {
+            _ = try P9CanonicalName.canonicalBase(requestedName)
+            return nil
+        } catch {
+            return (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(
+                "Save Edited Program as New",
+                systemImage: "doc.badge.plus"
+            )
+            .font(SuiteFont.medium(15))
+            .tracking(2.4)
+
+            Text(
+                "The edited program will be written directly beside \(sourceFilename) in the current IMG. The original P9 and all keygroup data remain unchanged."
+            )
+            .font(SuiteFont.regular(10))
+            .foregroundStyle(Color.suiteUnit)
+            .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text("NEW S950 PROGRAM NAME")
+                    .font(SuiteFont.medium(9))
+                    .tracking(1.1)
+                TextField("Program name", text: $requestedName)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { confirmIfValid() }
+                Text("UP TO 10 SAMPLER-VISIBLE CHARACTERS")
+                    .font(SuiteFont.regular(8))
+                    .foregroundStyle(Color.suiteUnit)
+            }
+
+            if let validationError {
+                Label(validationError, systemImage: "exclamationmark.triangle.fill")
+                    .font(SuiteFont.regular(9))
+                    .foregroundStyle(Color.suiteRed)
+            } else {
+                Label(
+                    "The new P9 will be re-exported and checked byte-for-byte.",
+                    systemImage: "checkmark.shield.fill"
+                )
+                .font(SuiteFont.regular(9))
+                .foregroundStyle(Color.suiteBlue)
+            }
+
+            HStack(spacing: 9) {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                Button("Save as New") { confirmIfValid() }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(validationError != nil)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+        .background(Color.suitePanel)
+    }
+
+    private func confirmIfValid() {
+        guard validationError == nil else { return }
+        let name = requestedName
+        dismiss()
+        onConfirm(name)
     }
 }
 

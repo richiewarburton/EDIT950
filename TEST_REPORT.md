@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.25 (build 43)**
+Current source: **1.8.37 (build 55)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -18,8 +18,12 @@ Run the self-contained application suite with:
 The suite covers IMG directory presentation, native P9/S9 handling, WAV
 conversion, tags, selection, drag and drop, read-only controls, Ableton
 import/export mapping, inter-application requests, removable-media cleanup and
-write-verification logic. The current accepted run completed with **73 passed
-and 0 failed**.
+write-verification logic. It includes Save As New selection, temporarily
+inverted MIDI key ranges, MIDI running status, channel filtering, note priority
+and panic handling, byte-preserving keygroup reordering and bounded on-screen
+diagnostic rendering. It also verifies that bandwidth conversion scales loop
+endpoints to the converted WAV's measured frame count. The current accepted run
+completed with **80 passed and 0 failed**.
 
 The following broader checks are also available:
 
@@ -36,8 +40,9 @@ The following broader checks are also available:
   exports it again and confirms that the source material remains unchanged.
 - The interaction check renders the main application flows and exercises
   selection, editing, rename, import/export and read-only behaviour.
-- The visual checks render the browser, editor and settings views for manual
-  inspection.
+- The visual checks render the browser, including its persistent IMG-capacity
+  header meter, plus the sample editor, zoomed program editor and settings views
+  for manual inspection in light and dark appearances.
 - The release build verifies the application metadata, Universal
   `arm64`/`x86_64` architectures and deep ad-hoc signature.
 
@@ -51,6 +56,7 @@ The accepted genuine-image pass covered:
 
 - byte-identical P9 round trips;
 - S9 export, edit and replacement with loop and pitch checks;
+- verified Save As New creation that preserves the original S9 and P9 bytes;
 - verified complete-IMG backups and rollback after injected failures;
 - keygroup transfers between writable IMG copies;
 - focused export of a P9 and its linked S9 files;
@@ -68,6 +74,9 @@ Automated and manual checks confirm that:
 - image mutations are serialized;
 - replacement content is staged before an IMG is touched;
 - successful writes are re-exported and byte-verified;
+- Save As New requires a distinct valid S950 name and sufficient additional
+  directory and sample-memory capacity;
+- Save As New verifies both the new S9 and the unchanged original S9;
 - failed verified operations restore the complete backup when available;
 - user WAV, P9 and S9 source files are never edited in place;
 - temporary audition files are removed with the session; and

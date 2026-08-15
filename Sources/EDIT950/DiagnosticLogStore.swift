@@ -16,8 +16,10 @@ enum DiagnosticLogLevel: String, Sendable {
 @MainActor
 final class DiagnosticLogStore: ObservableObject {
     nonisolated static let defaultMaximumBytes = 1_500_000
+    nonisolated static let defaultMaximumVisibleBytes = 96_000
 
-    @Published private(set) var text: String
+    private(set) var text: String
+    @Published private(set) var visibleText: String
     @Published private(set) var storageWarning: String?
 
     let appName: String
@@ -44,6 +46,7 @@ final class DiagnosticLogStore: ObservableObject {
         let loaded = (try? String(contentsOf: self.fileURL, encoding: .utf8)) ?? ""
         let retained = Self.trimmed(loaded, maximumBytes: self.maximumBytes)
         text = retained
+        visibleText = Self.visibleTail(retained)
         persistedByteCount = retained.utf8.count
         if retained != loaded {
             do {
@@ -84,6 +87,7 @@ final class DiagnosticLogStore: ObservableObject {
         let needsCompaction = retained != combined
 
         text = retained
+        visibleText = Self.visibleTail(retained)
         do {
             if needsCompaction || persistedByteCount + line.utf8.count > maximumBytes {
                 try Self.write(retained, to: fileURL)
@@ -100,6 +104,7 @@ final class DiagnosticLogStore: ObservableObject {
 
     func clear() {
         text = ""
+        visibleText = ""
         persistedByteCount = 0
         do {
             try Self.write("", to: fileURL)
@@ -124,6 +129,7 @@ final class DiagnosticLogStore: ObservableObject {
             let loaded = try String(contentsOf: fileURL, encoding: .utf8)
             let retained = Self.trimmed(loaded, maximumBytes: maximumBytes)
             text = retained
+            visibleText = Self.visibleTail(retained)
             persistedByteCount = retained.utf8.count
             storageWarning = nil
             if retained != loaded {
@@ -210,6 +216,18 @@ final class DiagnosticLogStore: ObservableObject {
         guard data.count > maximumBytes else { return value }
         let marker = "… Earlier diagnostic entries were removed to keep the log size limited.\n"
         let available = max(0, maximumBytes - marker.utf8.count)
+        var suffix = String(decoding: data.suffix(available), as: UTF8.self)
+        if let newline = suffix.firstIndex(of: "\n") {
+            suffix.removeSubrange(suffix.startIndex...newline)
+        }
+        return marker + suffix
+    }
+
+    private static func visibleTail(_ value: String) -> String {
+        let data = Data(value.utf8)
+        guard data.count > defaultMaximumVisibleBytes else { return value }
+        let marker = "… Showing the latest diagnostic entries. Copy or Save for the complete log.\n"
+        let available = max(0, defaultMaximumVisibleBytes - marker.utf8.count)
         var suffix = String(decoding: data.suffix(available), as: UTF8.self)
         if let newline = suffix.firstIndex(of: "\n") {
             suffix.removeSubrange(suffix.startIndex...newline)

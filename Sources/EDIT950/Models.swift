@@ -179,6 +179,14 @@ struct S9ReplacementResult: Equatable {
     let wavInspection: WAVInspection
 }
 
+struct S9CreationResult: Equatable {
+    let filename: String
+    let originalFilename: String
+    let backupURL: URL?
+    let verifiedByteCount: Int
+    let wavInspection: WAVInspection
+}
+
 struct OperationProgress: Equatable {
     let kind: OperationKind
     var current: Int

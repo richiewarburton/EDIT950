@@ -28,6 +28,9 @@ mkdir -p "$PACKAGE_DIR"
 /usr/bin/ditto "$APP_DIR" "$PACKAGE_DIR/EDIT950.app"
 mkdir -p "$PACKAGE_DIR/Screenshots"
 cp Documentation/Images/edit950-browser.png "$PACKAGE_DIR/Screenshots/"
+cp Documentation/Images/edit950-sample-editor.png "$PACKAGE_DIR/Screenshots/"
+cp Documentation/Images/edit950-bandwidth-editor.png "$PACKAGE_DIR/Screenshots/"
+cp Documentation/Images/edit950-diagnostic-log.png "$PACKAGE_DIR/Screenshots/"
 cp Documentation/Images/edit950-p9-editor.png "$PACKAGE_DIR/Screenshots/"
 cp Documentation/Images/edit950-shared-tag-settings.png "$PACKAGE_DIR/Screenshots/"
 cp Documentation/Images/edit950-verified-overwrite.png "$PACKAGE_DIR/Screenshots/"
@@ -52,6 +55,9 @@ cp TEST_REPORT.md "$PACKAGE_DIR/TEST_REPORT.md"
     "Documentation/USER_GUIDE.md" \
     "Documentation/AKAI_UTIL_UNIVERSAL.md" \
     "Screenshots/edit950-browser.png" \
+    "Screenshots/edit950-sample-editor.png" \
+    "Screenshots/edit950-bandwidth-editor.png" \
+    "Screenshots/edit950-diagnostic-log.png" \
     "Screenshots/edit950-p9-editor.png" \
     "Screenshots/edit950-shared-tag-settings.png" \
     "Screenshots/edit950-verified-overwrite.png" \

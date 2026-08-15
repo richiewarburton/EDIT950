@@ -115,6 +115,33 @@ struct TestRunner {
                 try log.saveCopy(to: exportedURL)
                 let exported = try String(contentsOf: exportedURL, encoding: .utf8)
                 try expect(exported == log.text)
+
+                let largeURL = temporary.appendingPathComponent("large.log")
+                let largeLog = DiagnosticLogStore(
+                    appName: "EDIT950",
+                    fileURL: largeURL,
+                    maximumBytes: 150_000,
+                    startSession: false,
+                    now: { fixedDate }
+                )
+                for index in 0..<10 {
+                    largeLog.record(
+                        .debug,
+                        category: "visible-tail",
+                        message: "event \(index) " + String(repeating: "z", count: 20_000)
+                    )
+                }
+                try expect(largeLog.text.utf8.count > largeLog.visibleText.utf8.count)
+                try expect(
+                    largeLog.visibleText.utf8.count
+                        <= DiagnosticLogStore.defaultMaximumVisibleBytes
+                )
+                try expect(largeLog.visibleText.contains("event 9"))
+                try expect(
+                    largeLog.visibleText.contains(
+                        "Copy or Save for the complete log"
+                    )
+                )
                 log.clear()
                 try expect(log.text.contains("Log cleared by user"))
             }
@@ -681,7 +708,7 @@ struct TestRunner {
             let workspace = try temporaryDirectory("s950-bandwidth")
             defer { try? FileManager.default.removeItem(at: workspace) }
             let source = workspace.appendingPathComponent("source.wav")
-            try makeMarkerWAV(cueSampleOffsets: [1, 3], s9Header: Data(repeating: 0, count: 60)).write(to: source)
+            try makeMarkerWAV(cueSampleOffsets: [1, 4], s9Header: Data(repeating: 0, count: 60)).write(to: source)
             for mode in S950ResamplingMode.allCases {
                 let output = workspace.appendingPathComponent("\(mode.rawValue).wav")
                 let inspection = try WAVService.resampleS950(
@@ -694,6 +721,44 @@ struct TestRunner {
                 let markers = try WAVService.cueSampleOffsets(in: output)
                 try expect(markers == [1, 2])
             }
+        }
+
+        test("loop scaling uses the converted file's measured final frame") {
+            let scaled = try S9LoopPoints(
+                start: 882,
+                end: 4_410
+            ).scaled(
+                fromSampleLength: 4_410,
+                toSampleLength: 1_047
+            )
+            try expect(scaled.start == 209)
+            try expect(scaled.end == 1_047)
+        }
+
+        test("S9 storage projection reports before after and IMG capacity") {
+            let projection = S9SampleStorageProjection(
+                originalBytes: 10_060,
+                originalSampleRate: 48_000,
+                convertedSampleRate: 24_000,
+                currentImageUsedBytes: 50_000,
+                imageTotalBytes: 100_000
+            )
+            try expect(projection.originalBytes == 10_060)
+            try expect(projection.convertedBytes == 5_060)
+            try expect(projection.projectedImageUsedBytes == 45_000)
+            try expect(projection.projectedImageFreeBytes == 55_000)
+            try expect(projection.projectedImageUsedFraction == 0.45)
+
+            let overCapacity = S9SampleStorageProjection(
+                originalBytes: 60,
+                originalSampleRate: 1,
+                convertedSampleRate: 1,
+                currentImageUsedBytes: 120,
+                imageTotalBytes: 100
+            )
+            try expect(overCapacity.convertedBytes == 60)
+            try expect(overCapacity.projectedImageFreeBytes == 0)
+            try expect(overCapacity.projectedImageUsedFraction == 1)
         }
 
         test("zero-crossing navigation is strict and reports waveform direction") {
@@ -767,6 +832,49 @@ struct TestRunner {
             )
         }
 
+        test("Finder associations cover IMG, P9 and S9 without claiming ISO") {
+            try expect(
+                AkaiFileAssociation.allCases.map(\.filenameExtension)
+                    == ["IMG", "P9", "S9"]
+            )
+            try expect(
+                AkaiFileAssociation.allCases.map(\.typeIdentifier)
+                    == [
+                        "com.local.akai-disk-image",
+                        "com.local.akai-s950-program",
+                        "com.local.akai-s950-sample"
+                    ]
+            )
+
+            let infoURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Resources/Info.plist")
+            let infoData = try Data(contentsOf: infoURL)
+            let info = try PropertyListSerialization.propertyList(
+                from: infoData,
+                format: nil
+            ) as? [String: Any]
+            let documentTypes = info?["CFBundleDocumentTypes"]
+                as? [[String: Any]] ?? []
+            for association in AkaiFileAssociation.allCases {
+                try expect(documentTypes.contains { documentType in
+                    let extensions = documentType["CFBundleTypeExtensions"]
+                        as? [String] ?? []
+                    let contentTypes = documentType["LSItemContentTypes"]
+                        as? [String] ?? []
+                    return extensions.contains(association.rawValue)
+                        && contentTypes == [association.typeIdentifier]
+                })
+            }
+            let imgDeclaration = documentTypes.first { documentType in
+                (documentType["LSItemContentTypes"] as? [String])
+                    == [AkaiFileAssociation.img.typeIdentifier]
+            }
+            try expect(
+                (imgDeclaration?["CFBundleTypeExtensions"] as? [String])
+                    == ["img", "IMG"]
+            )
+        }
+
         test("P9 programs round-trip without changing any unknown bytes") {
             let source = makeP9Fixture(keygroupCount: 2)
             let program = try P9Program(data: source)
@@ -812,6 +920,119 @@ struct TestRunner {
                     program.keygroups[1],
                     activeNotes: [MIDINoteKey(channel: 1, note: 49): 127]
                 )
+            )
+            program.keygroups[1].lowKey = 72
+            program.keygroups[1].highKey = 60
+            try expect(
+                !MIDIKeygroupTriggerMatcher.matches(
+                    program.keygroups[1],
+                    activeNotes: [MIDINoteKey(channel: 1, note: 64): 127]
+                )
+            )
+        }
+
+        test("MIDI decoder handles running status split packets and panic") {
+            let c4 = MIDINoteKey(channel: 0, note: 60)
+            let cs4 = MIDINoteKey(channel: 0, note: 61)
+            let c5 = MIDINoteKey(channel: 2, note: 72)
+            var decoder = MIDIMessageDecoder()
+
+            try expect(
+                decoder.decode([0x90, 60, 100, 61, 110])
+                    == [
+                        .noteOn(key: c4, velocity: 100),
+                        .noteOn(key: cs4, velocity: 110)
+                    ]
+            )
+            try expect(decoder.decode([0x82, 72]).isEmpty)
+            try expect(
+                decoder.decode([45])
+                    == [.noteOff(key: c5, velocity: 45)]
+            )
+            try expect(
+                decoder.decode([0x90, 60, 0xF8, 99])
+                    == [.noteOn(key: c4, velocity: 99)]
+            )
+            try expect(
+                decoder.decode([0x90, 60, 0])
+                    == [.noteOff(key: c4, velocity: 0)]
+            )
+            try expect(
+                decoder.decode([0xB3, 123, 0])
+                    == [.allNotesOff(channel: 3)]
+            )
+            try expect(
+                decoder.decode([0xFF])
+                    == [.allNotesOff(channel: nil)]
+            )
+            try expect(decoder.decode([60, 127]).isEmpty)
+            try expect(decoder.decode([0x90, 64]).isEmpty)
+            decoder.reset()
+            try expect(decoder.decode([127]).isEmpty)
+        }
+
+        test("MIDI monophonic tracker filters channels and restores held notes") {
+            let c4 = MIDINoteKey(channel: 0, note: 60)
+            let e4 = MIDINoteKey(channel: 0, note: 64)
+            let g4Channel2 = MIDINoteKey(channel: 1, note: 67)
+            var tracker = MIDIMonophonicNoteTracker(channelFilter: 0)
+
+            try expect(
+                tracker.handle(.noteOn(key: c4, velocity: 80))
+                    == .play(note: 60, velocity: 80)
+            )
+            try expect(
+                tracker.handle(.noteOn(key: g4Channel2, velocity: 100)) == nil
+            )
+            try expect(
+                tracker.handle(.noteOn(key: e4, velocity: 90))
+                    == .play(note: 64, velocity: 90)
+            )
+            try expect(
+                tracker.handle(.noteOff(key: e4, velocity: 12))
+                    == .play(note: 60, velocity: 80)
+            )
+            try expect(
+                tracker.handle(.allNotesOff(channel: 1)) == nil
+            )
+            try expect(
+                tracker.handle(.allNotesOff(channel: 0)) == .stop
+            )
+            try expect(tracker.heldNotes.isEmpty)
+            try expect(tracker.setChannelFilter(nil) == nil)
+            try expect(
+                tracker.handle(.noteOn(key: g4Channel2, velocity: 127))
+                    == .play(note: 67, velocity: 127)
+            )
+            try expect(tracker.reset() == .stop)
+            try expect(tracker.reset() == nil)
+        }
+
+        test("MIDI audition note-off follows the native playback mode") {
+            let event = MIDIInputEvent.noteOff(
+                key: MIDINoteKey(channel: 0, note: 60),
+                velocity: 0
+            )
+            try expect(
+                MIDIAuditionPlaybackPolicy.resolvedAction(
+                    .stop,
+                    for: event,
+                    sustainsThroughNoteOff: true
+                ) == nil
+            )
+            try expect(
+                MIDIAuditionPlaybackPolicy.resolvedAction(
+                    .stop,
+                    for: event,
+                    sustainsThroughNoteOff: false
+                ) == .stop
+            )
+            try expect(
+                MIDIAuditionPlaybackPolicy.resolvedAction(
+                    .stop,
+                    for: .allNotesOff(channel: nil),
+                    sustainsThroughNoteOff: true
+                ) == .stop
             )
         }
 
@@ -1765,6 +1986,68 @@ struct TestRunner {
             try expect(saved[copiedBase + 0x15] == 0x6B)
             try expectThrows {
                 try program.deleteKeygroups(at: [0, 1])
+            }
+        }
+
+        test("P9 keygroups reorder complete records and preserve selection mapping") {
+            var source = makeP9Fixture(keygroupCount: 4)
+            for index in 0..<4 {
+                let base = P9Program.headerSize + index * P9Program.keygroupSize
+                source[base + 0x15] = UInt8(0x70 + index)
+            }
+            var program = try P9Program(data: source)
+            for index in program.keygroups.indices {
+                program.keygroups[index].softSampleName = "SOFT \(index + 1)"
+                program.keygroups[index].loudSampleName = "LOUD \(index + 1)"
+                program.keygroups[index].softTuning = P9Tuning(
+                    transpose: index - 2,
+                    fine: index
+                )
+                program.keygroups[index].loudTuning = P9Tuning(
+                    transpose: index + 2,
+                    fine: -index
+                )
+                program.keygroups[index].softFilter = 20 + index
+                program.keygroups[index].softLoudness = index - 2
+                program.keygroups[index].loudFilter = 60 + index
+                program.keygroups[index].loudLoudness = 2 - index
+                program.keygroups[index].envelope.attack = 10 + index
+                program.keygroups[index].vcfEnvelope.release = 30 + index
+                program.keygroups[index].midiChannelOffset = index
+                program.keygroups[index].output = .mono(index + 1)
+            }
+            let originalKeygroups = program.keygroups
+            let mapping = try program.moveKeygroups(
+                fromOffsets: IndexSet(integer: 0),
+                toOffset: 4
+            )
+            try expect(program.keygroups.map(\.id) == [0, 1, 2, 3])
+            let reorderedOriginalIndexes = [1, 2, 3, 0]
+            for (newIndex, oldIndex) in reorderedOriginalIndexes.enumerated() {
+                var expected = originalKeygroups[oldIndex]
+                expected.id = newIndex
+                try expect(program.keygroups[newIndex] == expected)
+            }
+            try expect(
+                mapping[0] == 3 && mapping[1] == 0
+                    && mapping[2] == 1 && mapping[3] == 2
+            )
+            try expect(
+                program.keygroups[0].noteRangeWithMIDIDescription.contains(
+                    "MIDI \(program.keygroups[0].lowKey)–\(program.keygroups[0].highKey)"
+                )
+            )
+
+            let saved = try program.encoded()
+            let reopened = try P9Program(data: saved)
+            try expect(reopened.keygroups == program.keygroups)
+            for (index, marker) in [0x71, 0x72, 0x73, 0x70].enumerated() {
+                let base = P9Program.headerSize + index * P9Program.keygroupSize
+                try expect(saved[base + 0x15] == UInt8(marker))
+                for addressOffset in [0x28, 0x3E, 0x44] {
+                    try expect(saved[base + addressOffset] == 0)
+                    try expect(saved[base + addressOffset + 1] == 0)
+                }
             }
         }
 

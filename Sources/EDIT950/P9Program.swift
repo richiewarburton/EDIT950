@@ -4,6 +4,7 @@ enum P9ProgramError: LocalizedError, Equatable {
     case tooShort(Int)
     case invalidSize(actual: Int, expected: Int, keygroups: Int)
     case invalidKeygroup(Int)
+    case invalidMoveDestination(Int)
     case invalidKeygroupRecord(Int)
     case tooManyKeygroups(Int)
     case mustKeepOneKeygroup
@@ -16,6 +17,8 @@ enum P9ProgramError: LocalizedError, Equatable {
             return "The P9 file reports \(keygroups) keygroups and should be \(expected) bytes, but it is \(actual) bytes."
         case .invalidKeygroup(let index):
             return "Keygroup \(index + 1) is outside this program."
+        case .invalidMoveDestination(let index):
+            return "Keygroups cannot be moved to position \(index + 1) in this program."
         case .invalidKeygroupRecord(let size):
             return "A copied keygroup is \(size) bytes; an S950 keygroup must be exactly 70 bytes."
         case .tooManyKeygroups(let count):
@@ -602,6 +605,62 @@ struct P9Program: Equatable {
         markStructureTransferSafe()
     }
 
+    /// Reorders complete native keygroup records while retaining unknown bytes
+    /// with their keygroup. The returned map converts every old index to its
+    /// new index so editor selection can follow moved rows.
+    @discardableResult
+    mutating func moveKeygroups(
+        fromOffsets offsets: IndexSet,
+        toOffset destination: Int
+    ) throws -> [Int: Int] {
+        guard offsets.allSatisfy(keygroups.indices.contains) else {
+            throw P9ProgramError.invalidKeygroup(
+                offsets.first(where: { !keygroups.indices.contains($0) }) ?? -1
+            )
+        }
+        guard (0...keygroups.count).contains(destination) else {
+            throw P9ProgramError.invalidMoveDestination(destination)
+        }
+
+        let originalIndexes = Array(keygroups.indices)
+        guard !offsets.isEmpty else {
+            return Dictionary(uniqueKeysWithValues: originalIndexes.map { ($0, $0) })
+        }
+        let movedIndexes = offsets.sorted()
+        let movedSet = Set(movedIndexes)
+        let moving = movedIndexes.map { index in
+            (oldIndex: index, keygroup: keygroups[index], record: keygroupOriginalRecords[index])
+        }
+        var remaining = originalIndexes.compactMap { index in
+            movedSet.contains(index)
+                ? nil
+                : (oldIndex: index, keygroup: keygroups[index], record: keygroupOriginalRecords[index])
+        }
+        let adjustedDestination = destination
+            - movedIndexes.lazy.filter { $0 < destination }.count
+        guard (0...remaining.count).contains(adjustedDestination) else {
+            throw P9ProgramError.invalidMoveDestination(destination)
+        }
+        remaining.insert(contentsOf: moving, at: adjustedDestination)
+
+        let reorderedOldIndexes = remaining.map(\.oldIndex)
+        let mapping = Dictionary(
+            uniqueKeysWithValues: reorderedOldIndexes.enumerated().map { newIndex, oldIndex in
+                (oldIndex, newIndex)
+            }
+        )
+        guard reorderedOldIndexes != originalIndexes else { return mapping }
+
+        keygroups = remaining.enumerated().map { newIndex, entry in
+            var keygroup = entry.keygroup
+            keygroup.id = newIndex
+            return keygroup
+        }
+        keygroupOriginalRecords = remaining.map(\.record)
+        markStructureTransferSafe()
+        return mapping
+    }
+
     static func blank(named name: String) throws -> P9Program {
         var header = Data(repeating: 0, count: Self.headerSize)
         header.replaceSubrange(0x00..<0x0A, with: Self.encodedName(name))
@@ -941,6 +1000,10 @@ struct P9BulkEdits: Equatable {
 extension P9Keygroup {
     var noteRangeDescription: String {
         "\(Self.noteName(lowKey))–\(Self.noteName(highKey))"
+    }
+
+    var noteRangeWithMIDIDescription: String {
+        "\(noteRangeDescription) · MIDI \(lowKey)–\(highKey)"
     }
 
     static func noteName(_ value: Int) -> String {

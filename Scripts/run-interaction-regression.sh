@@ -14,6 +14,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   -sdk "$SDK_PATH" \
   -target arm64-apple-macosx14.0 \
   -swift-version 5 \
+  -D AKAI_TESTING \
   -parse-as-library \
   Sources/EDIT950/Models.swift \
   Sources/EDIT950/SuiteDesignSystem.swift \

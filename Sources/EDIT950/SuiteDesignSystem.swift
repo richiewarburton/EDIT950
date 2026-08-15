@@ -11,7 +11,6 @@ final class SuiteUndoCoordinator: ObservableObject {
         manager.levelsOfUndo = 50
         manager.groupsByEvent = false
         let names = [
-            "NSUndoManagerCheckpointNotification",
             "NSUndoManagerDidOpenUndoGroupNotification",
             "NSUndoManagerWillCloseUndoGroupNotification",
             "NSUndoManagerDidUndoChangeNotification",
@@ -93,6 +92,22 @@ enum SuiteZoomLevel: Double, CaseIterable, Identifiable {
     var title: String { "\(Int(rawValue * 100))%" }
 }
 
+enum SuiteAppearance: String, CaseIterable, Identifiable {
+    case system
+    case light
+    case dark
+
+    var id: String { rawValue }
+    var title: String { rawValue.uppercased() }
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: nil
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
+
 @MainActor
 final class SuitePreferences: ObservableObject {
     static let notification = Notification.Name("com.e45recordings.950tools.preferences.changed")
@@ -100,6 +115,9 @@ final class SuitePreferences: ObservableObject {
     @Published var inspectorVisible: Bool { didSet { persist("suite.inspector.visible.\(app.rawValue)", inspectorVisible) } }
     @Published var zoom: SuiteZoomLevel {
         didSet { persist("suite.zoom.\(app.rawValue)", zoom.rawValue) }
+    }
+    @Published var appearance: SuiteAppearance {
+        didSet { persist("suite.appearance", appearance.rawValue) }
     }
     let app: SuiteApp
     private let defaults: UserDefaults
@@ -123,6 +141,9 @@ final class SuitePreferences: ObservableObject {
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
+        appearance = SuiteAppearance(
+            rawValue: defaults.string(forKey: "suite.appearance") ?? ""
+        ) ?? .system
         observer = DistributedNotificationCenter.default().addObserver(
             forName: Self.notification,
             object: nil,
@@ -146,6 +167,9 @@ final class SuitePreferences: ObservableObject {
         zoom = SuiteZoomLevel(
             rawValue: defaults.double(forKey: "suite.zoom.\(app.rawValue)")
         ) ?? .oneHundred
+        appearance = SuiteAppearance(
+            rawValue: defaults.string(forKey: "suite.appearance") ?? ""
+        ) ?? .system
         isReloading = false
     }
 
@@ -473,6 +497,102 @@ struct SuiteProgressBar: View {
                     .frame(width: geometry.size.width * (value.map { min(max($0, 0), 1) } ?? 0.32))
             }
         }.frame(height: 4).clipShape(RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+struct SuiteIMGCapacityMeter: View {
+    let usedBytes: Int64
+    let totalBytes: Int64
+    var accessibilityLabel = "IMG capacity"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Text("IMG CAPACITY")
+                Spacer()
+                Text(
+                    usedFraction.formatted(
+                        .percent.precision(.fractionLength(1))
+                    )
+                )
+                .foregroundStyle(meterColour)
+            }
+            .font(SuiteFont.regular(7))
+            .tracking(0.55)
+            .foregroundStyle(Color.suiteUnit)
+
+            GeometryReader { geometry in
+                let fillWidth = geometry.size.width * usedFraction
+                ZStack(alignment: .leading) {
+                    capacityGradient.opacity(0.13)
+                    capacityGradient
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: fillWidth)
+                        }
+                        .blur(radius: 3)
+                        .opacity(0.72)
+                    capacityGradient
+                        .mask(alignment: .leading) {
+                            Rectangle().frame(width: fillWidth)
+                        }
+                    if fillWidth > 0 {
+                        Rectangle()
+                            .fill(Color.suiteInk.opacity(0.75))
+                            .frame(width: 1)
+                            .offset(x: max(0, fillWidth - 1))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3)
+                        .stroke(Color.suiteRule2)
+                )
+            }
+            .frame(height: 9)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(
+            "\(clampedUsedBytes.formattedByteCount) used, "
+                + "\(freeBytes.formattedByteCount) free, "
+                + usedFraction.formatted(
+                    .percent.precision(.fractionLength(1))
+                )
+        )
+    }
+
+    private var clampedUsedBytes: Int64 {
+        min(max(0, usedBytes), max(0, totalBytes))
+    }
+
+    private var freeBytes: Int64 {
+        max(0, totalBytes - clampedUsedBytes)
+    }
+
+    private var usedFraction: Double {
+        guard totalBytes > 0 else { return 0 }
+        return min(1, max(0, Double(usedBytes) / Double(totalBytes)))
+    }
+
+    private var meterColour: Color {
+        if usedFraction >= 0.94 { return .suiteRed }
+        if usedFraction >= 0.66 { return .suiteYellow }
+        return .suiteBlue
+    }
+
+    private var capacityGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .suiteBlue, location: 0),
+                .init(color: .suiteBlue, location: 0.56),
+                .init(color: .suiteYellow, location: 0.66),
+                .init(color: .suiteYellow, location: 0.86),
+                .init(color: .suiteRed, location: 0.94),
+                .init(color: .suiteRed, location: 1)
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 }
 

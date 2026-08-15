@@ -108,7 +108,8 @@ struct KeygroupTransferRegressionRunner {
                 indexes: [sourceIndex],
                 source: .image(
                     filename: sourceFile.name,
-                    imageURL: sourceCopy
+                    imageURL: sourceCopy,
+                    volumePath: model.snapshot.currentPath
                 )
             )
             guard let transfer = model.keygroupTransfer,
