@@ -274,10 +274,10 @@ final class AppModel: ObservableObject {
         refreshMainProgramAuditionTarget()
     }
     var p9FileCount: Int {
-        snapshot.files.count { $0.name.pathExtensionUppercased == "P9" }
+        snapshot.files.filter { $0.name.pathExtensionUppercased == "P9" }.count
     }
     var s9FileCount: Int {
-        snapshot.files.count { $0.name.pathExtensionUppercased == "S9" }
+        snapshot.files.filter { $0.name.pathExtensionUppercased == "S9" }.count
     }
     var imgHeaderSummary: IMGHeaderSummary? {
         guard let session else { return nil }
