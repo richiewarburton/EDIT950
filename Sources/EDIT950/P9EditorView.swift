@@ -1007,6 +1007,7 @@ struct P9EditorSheet: View {
                 Button(applyButtonTitle) { applyCurrentEdits() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                    .accessibilityIdentifier("p9-bulk-apply-button")
                     .disabled(!canApply)
             }
             Button("Save P9 As…") { saveP9As() }
@@ -1991,9 +1992,14 @@ private struct IndividualP9KeygroupEditor: View {
 private struct P9BoundedNumberField: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
+    var accessibilityIdentifier: String? = nil
 
     var body: some View {
-        P9DraggableNumberTextField(value: $value, range: range)
+        P9DraggableNumberTextField(
+            value: $value,
+            range: range,
+            accessibilityIdentifier: accessibilityIdentifier
+        )
             .frame(width: 58)
             .help("Type a value, drag up or down, or use the arrow buttons")
     }
@@ -2002,6 +2008,7 @@ private struct P9BoundedNumberField: View {
 private struct P9DraggableNumberTextField: NSViewRepresentable {
     @Binding var value: Int
     let range: ClosedRange<Int>
+    let accessibilityIdentifier: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -2014,6 +2021,9 @@ private struct P9DraggableNumberTextField: NSViewRepresentable {
         field.font = NSFont(name: "JetBrainsMono-Regular", size: 11)
         field.delegate = context.coordinator
         context.coordinator.field = field
+        if let accessibilityIdentifier {
+            field.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
 
         let pan = NSPanGestureRecognizer(
             target: context.coordinator,
@@ -2093,6 +2103,73 @@ private struct P9DraggableNumberTextField: NSViewRepresentable {
     }
 }
 
+private enum P9BulkOperationChoice: String, CaseIterable, Identifiable {
+    case unchanged = "Unchanged"
+    case set = "Set"
+    case adjust = "Adjust"
+
+    var id: Self { self }
+
+    init(operation: P9BulkMode?) {
+        switch operation {
+        case .set: self = .set
+        case .adjust: self = .adjust
+        case nil: self = .unchanged
+        }
+    }
+
+    var operation: P9BulkMode? {
+        switch self {
+        case .unchanged: nil
+        case .set: .set
+        case .adjust: .adjust
+        }
+    }
+}
+
+private struct P9BulkOperationPicker: NSViewRepresentable {
+    @Binding var selection: P9BulkOperationChoice
+    let accessibilityIdentifier: String?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        picker.controlSize = .small
+        picker.addItems(
+            withTitles: P9BulkOperationChoice.allCases.map(\.rawValue)
+        )
+        picker.target = context.coordinator
+        picker.action = #selector(Coordinator.selectionChanged(_:))
+        if let accessibilityIdentifier {
+            picker.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
+        return picker
+    }
+
+    func updateNSView(_ picker: NSPopUpButton, context: Context) {
+        context.coordinator.parent = self
+        picker.selectItem(withTitle: selection.rawValue)
+    }
+
+    final class Coordinator: NSObject {
+        var parent: P9BulkOperationPicker
+
+        init(parent: P9BulkOperationPicker) {
+            self.parent = parent
+        }
+
+        @objc func selectionChanged(_ sender: NSPopUpButton) {
+            guard let title = sender.selectedItem?.title,
+                  let choice = P9BulkOperationChoice(rawValue: title)
+            else { return }
+            parent.selection = choice
+        }
+    }
+}
+
 private struct BulkP9KeygroupEditor: View {
     @Binding var edits: P9BulkEdits
     @Binding var loudSampleExpanded: Bool
@@ -2152,7 +2229,12 @@ private struct BulkP9KeygroupEditor: View {
                             bulkRow("Attack", \.envAttack, range: 0...99)
                             bulkRow("Decay", \.envDecay, range: 0...99)
                             bulkRow("Sustain", \.envSustain, range: 0...99)
-                            bulkRow("Release", \.envRelease, range: 0...99)
+                            bulkRow(
+                                "Release",
+                                \.envRelease,
+                                range: 0...99,
+                                accessibilityID: "p9-bulk-amplitude-release"
+                            )
                         }
                         bulkGroup("Velocity Sensitivity") {
                             bulkRow("Loudness", \.velocityLoudness, range: 0...99)
@@ -2251,27 +2333,26 @@ private struct BulkP9KeygroupEditor: View {
     private func bulkRow(
         _ title: String,
         _ keyPath: WritableKeyPath<P9BulkEdits, P9BulkNumberEdit>,
-        range: ClosedRange<Int>
+        range: ClosedRange<Int>,
+        accessibilityID: String? = nil
     ) -> some View {
         let field = binding(keyPath)
-        let operation = Binding<P9BulkMode?>(
-            get: { field.wrappedValue.operation },
-            set: { newValue in
+        let operation = Binding<P9BulkOperationChoice>(
+            get: { P9BulkOperationChoice(operation: field.wrappedValue.operation) },
+            set: { choice in
                 var updated = field.wrappedValue
-                updated.operation = newValue
+                updated.operation = choice.operation
                 field.wrappedValue = updated
             }
         )
         return HStack(spacing: 8) {
             Text(title)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Picker("", selection: operation) {
-                Text("Unchanged").tag(P9BulkMode?.none)
-                ForEach(P9BulkMode.allCases) { mode in
-                    Text(mode.rawValue).tag(Optional(mode))
-                }
-            }
-            .labelsHidden()
+            P9BulkOperationPicker(
+                selection: operation,
+                accessibilityIdentifier:
+                    accessibilityID.map { "\($0)-operation" }
+            )
             .frame(width: 112)
             HStack(spacing: 3) {
                 P9BoundedNumberField(
@@ -2279,7 +2360,9 @@ private struct BulkP9KeygroupEditor: View {
                         get: { field.wrappedValue.value },
                         set: { field.wrappedValue.value = $0 }
                     ),
-                    range: field.wrappedValue.mode == .set ? range : -128...128
+                    range: field.wrappedValue.mode == .set ? range : -128...128,
+                    accessibilityIdentifier:
+                        accessibilityID.map { "\($0)-value" }
                 )
                 Stepper(
                     "",
@@ -2292,7 +2375,7 @@ private struct BulkP9KeygroupEditor: View {
                 .labelsHidden()
             }
             .frame(width: 86, alignment: .trailing)
-            .disabled(operation.wrappedValue == nil)
+            .disabled(operation.wrappedValue == .unchanged)
         }
     }
 

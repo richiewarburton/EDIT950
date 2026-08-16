@@ -31,6 +31,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/DiagnosticLogStore.swift \
   Sources/EDIT950/VolumeCoordination.swift \
   Sources/EDIT950/AppSettings.swift \
+  Tests/P9TestFixture.swift \
   Tests/TestRunner.swift \
   -o "$BUILD_DIR/EDIT950Tests" \
   -framework AppKit \
@@ -40,3 +41,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
 
 chmod +x Tests/Fixtures/fake-akaiutil.sh
 "$BUILD_DIR/EDIT950Tests"
+
+"$PROJECT_DIR/Scripts/run-p9-editor-smoke.sh" \
+  synthetic.p9 \
+  /tmp/EDIT950-P9-bulk-release-regression.png \
+  --bulk-release

@@ -33,6 +33,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/ProgramAuditionViews.swift \
   Sources/EDIT950/DiagnosticLogStore.swift \
   Sources/EDIT950/P9EditorView.swift \
+  Tests/P9TestFixture.swift \
   Tests/P9EditorVisualRunner.swift \
   -o "$BUILD_DIR/P9EditorVisualRunner" \
   -framework AppKit \
@@ -45,7 +46,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
 if [ "$SELECTION_MODE" = "--all" ] \
     || [ "$SELECTION_MODE" = "--spread" ] \
     || [ "$SELECTION_MODE" = "--image" ] \
-    || [ "$SELECTION_MODE" = "--overwrite" ]; then
+    || [ "$SELECTION_MODE" = "--overwrite" ] \
+    || [ "$SELECTION_MODE" = "--bulk-release" ]; then
   "$BUILD_DIR/P9EditorVisualRunner" "$P9_PATH" "$SCREENSHOT_PATH" "$SELECTION_MODE"
 else
   "$BUILD_DIR/P9EditorVisualRunner" "$P9_PATH" "$SCREENSHOT_PATH"

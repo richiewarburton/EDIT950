@@ -30,20 +30,19 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.45 (build 66)**. Requires macOS 14 or later.
+Current source version: **1.8.46 (build 67)**. Requires macOS 14 or later.
 
-### What is new in 1.8.45
+### What is new in 1.8.46
 
-- Bulk P9 editing now uses one clear **Unchanged / Set / Adjust** menu per field,
-  so exact zero-value edits cannot be left inactive behind a separate checkbox.
-- **Save P9 As…** now chooses between a standalone P9 and a verified renamed
-  copy in the current IMG.
-- Saving as new or deliberately overwriting an unchanged P9 is supported.
-- This candidate also includes the completed main-screen program audition,
-  output-rate-safe sample audition, IMG identity controls, User Manual link,
-  release checking and loaded-IMG companion actions from 1.8.38–1.8.44.
+- Bulk P9 numeric fields now use an explicit native
+  **Unchanged / Set / Adjust** control, fixing a rendered-state fault that could
+  leave a chosen Set operation inactive.
+- Setting Amplitude ENV Release to exactly `0`, applying it to all selected
+  keygroups and writing the P9 now changes and preserves every Release byte.
+- The automated suite now drives that complete 41-keygroup rendered workflow,
+  then encodes and reopens the result.
 
-See [the complete 1.8.45 release notes](ReleaseDocs/RELEASE_NOTES_1.8.45.md)
+See [the complete 1.8.46 release notes](ReleaseDocs/RELEASE_NOTES_1.8.46.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
