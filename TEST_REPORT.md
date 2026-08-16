@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.46 (build 67)**
+Current source: **1.8.47 (build 68)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -31,7 +31,8 @@ converted WAV's measured frame count, keeps current audition playback alive
 until the new preview is ready, and exposes the Finder association controls for
 IMG, P9 and S9. The current accepted run completed with **90 passed and 0
 failed**, followed by a rendered 41-keygroup bulk-Release regression that
-selects Set, applies zero, encodes and reopens the edited P9.
+starts with one selected keygroup, invokes **Select All Keygroups** with
+Command-A, selects Set, applies zero, encodes and reopens the edited P9.
 
 The following broader checks are also available:
 

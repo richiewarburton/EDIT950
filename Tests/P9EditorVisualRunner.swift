@@ -85,7 +85,7 @@ struct P9EditorVisualRunner {
                 contentSize = P9EditorSheet.presentationSize(
                     for: suitePreferences.zoom
                 )
-                let initialSelection = mode == "--all" || mode == "--bulk-release"
+                let initialSelection = mode == "--all"
                     ? Set(document.program.keygroups.indices)
                     : nil
                 root = AnyView(
@@ -167,6 +167,24 @@ struct P9EditorVisualRunner {
         guard let root = window.contentView else {
             throw P9EditorVisualFailure.bulkReleaseControls
         }
+
+        guard let selectAll = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            isARepeat: false,
+            keyCode: 0
+        ) else {
+            throw P9EditorVisualFailure.bulkReleaseControls
+        }
+        NSApp.sendEvent(selectAll)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+
         let valueField = root.descendant(
                 accessibilityIdentifier: "p9-bulk-amplitude-release-value"
               ) as? NSTextField
@@ -185,7 +203,7 @@ struct P9EditorVisualRunner {
         guard valueField?.isEnabled == true else {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
-        guard let keyDown = NSEvent.keyEvent(
+        guard let apply = NSEvent.keyEvent(
             with: .keyDown,
             location: .zero,
             modifierFlags: [],
@@ -200,7 +218,7 @@ struct P9EditorVisualRunner {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
         window.makeFirstResponder(nil)
-        window.sendEvent(keyDown)
+        window.sendEvent(apply)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         guard document.hasChanges,
               document.program.keygroups.allSatisfy({ $0.envelope.release == 0 })

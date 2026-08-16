@@ -468,6 +468,13 @@ struct P9EditorSheet: View {
             audition.activateEditor(preparedAuditionProgram)
         }
         .onDisappear { audition.deactivateEditor() }
+        .onKeyPress("a", phases: .down) { press in
+            guard press.modifiers.contains(.command) else {
+                return .ignored
+            }
+            selectAllKeygroups()
+            return .handled
+        }
         .onChange(of: document.program) { _, _ in
             audition.updateEditor(preparedAuditionProgram)
         }
@@ -801,8 +808,9 @@ struct P9EditorSheet: View {
                 Spacer()
                 Menu("Select") {
                     Button("Select All Keygroups") {
-                        selection = Set(document.program.keygroups.indices)
+                        selectAllKeygroups()
                     }
+                    .keyboardShortcut("a", modifiers: .command)
                     Button("Keep First Selected Only") {
                         if let first =
                             selection.sorted().first
@@ -1164,6 +1172,11 @@ struct P9EditorSheet: View {
         guard let target = pendingSelectionAfterBulkEdits else { return }
         pendingSelectionAfterBulkEdits = nil
         selection = target
+    }
+
+    private func selectAllKeygroups() {
+        selection = Set(document.program.keygroups.indices)
+        keygroupSelectionAnchor = document.program.keygroups.indices.first
     }
 
     private func prepareSpread() {

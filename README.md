@@ -30,19 +30,20 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.46 (build 67)**. Requires macOS 14 or later.
+Current source version: **1.8.47 (build 68)**. Requires macOS 14 or later.
 
-### What is new in 1.8.46
+### What is new in 1.8.47
 
-- Bulk P9 numeric fields now use an explicit native
-  **Unchanged / Set / Adjust** control, fixing a rendered-state fault that could
-  leave a chosen Set operation inactive.
-- Setting Amplitude ENV Release to exactly `0`, applying it to all selected
-  keygroups and writing the P9 now changes and preserves every Release byte.
-- The automated suite now drives that complete 41-keygroup rendered workflow,
-  then encodes and reopens the result.
+- Command-A in the P9 editor now selects every keygroup rather than leaving the
+  previous partial selection active.
+- The **Select All Keygroups** menu item and Command-A use the same explicit
+  selection action, so a subsequent bulk edit targets the count shown by
+  **Apply to … Keygroups**.
+- The rendered regression now begins with one keygroup selected, invokes
+  Command-A, applies Amplitude ENV Release `0`, then encodes and reopens the P9
+  and requires all 41 Release bytes to be zero.
 
-See [the complete 1.8.46 release notes](ReleaseDocs/RELEASE_NOTES_1.8.46.md)
+See [the complete 1.8.47 release notes](ReleaseDocs/RELEASE_NOTES_1.8.47.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
