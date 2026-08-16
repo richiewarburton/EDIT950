@@ -10,22 +10,23 @@ release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
 
-Version 1.8.47 build 68 makes Command-A select every keygroup in the P9 editor
-instead of leaving the previous partial selection active. The Select menu and
-keyboard command now share one explicit selection action. The rendered
-regression starts with a single selected keygroup, invokes Command-A, applies
-Amplitude ENV Release `0`, encodes and reopens the P9, and requires all 41
-Release bytes to be zero.
+Version 1.8.47 build 68 collects the new program and sample audition workflow,
+clear IMG identity and file associations, reorganized header, manual update
+checking, loaded-IMG companion actions and simplified P9 Save As workflow added
+since the 1.8.37 public release.
+
+**Known issue:** bulk P9 edits are not reliable for any selection of more than
+one keygroup. This is not confined to Release or Select All. Edit one keygroup
+at a time in 1.8.47 and follow
+[issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
 
 Version 1.8.46 build 67 replaces the bulk numeric operation picker with an
-explicit native **Unchanged / Set / Adjust** control. This fixes a rendered
-state fault that could show Set without activating the edit. A 41-keygroup
-regression now selects Set for Amplitude ENV Release, applies `0`, encodes and
-reopens the P9, and requires every Release byte to remain zero.
+explicit native **Unchanged / Set / Adjust** control. The later live-workflow
+report in issue #6 supersedes the earlier belief that this resolved bulk edits.
 
 Version 1.8.45 build 66 replaces misleading inactive bulk-edit checkboxes with
-one explicit **Unchanged / Set / Adjust** operation menu per numeric field.
-Exact zero values now apply predictably to every selected keygroup. One **Save
+one explicit **Unchanged / Set / Adjust** operation menu per numeric field. The
+multi-keygroup application path remains a known issue. One **Save
 P9 As…** action chooses between the filesystem and a verified renamed P9 in the
 current IMG, and unchanged programs may be deliberately duplicated or
 overwritten.
@@ -271,7 +272,7 @@ Open a standalone P9 from **File → Open S950 P9 Program…**, double-click a P
 
 ![EDIT950 P9 keygroup editor](Screenshots/edit950-p9-editor.png)
 
-The editor supports individual, selected and all-keygroup editing for:
+The editor exposes individual, selected and all-keygroup controls for:
 
 - key and velocity ranges, velocity crossfade and its optional custom midpoint;
 - soft and loud sample names;
@@ -281,13 +282,16 @@ The editor supports individual, selected and all-keygroup editing for:
 - MIDI channel and audio output;
 - constant pitch and one-shot.
 
+In 1.8.47, do not rely on these controls to apply an edit to more than one
+keygroup. Edit one keygroup at a time until issue #6 is resolved.
+
 Fine tuning is displayed exactly as the S950 shows it: the nearest semitone plus a signed −8…+7 Fine value in native 1/16-semitone steps. For example, a raw tuning of 380 is shown as Transpose `+24`, Fine `−04`, matching the sampler rather than the mathematically equivalent `+23`, `+12`.
 
 The editor uses a compact two-column parameter layout. Loud Sample controls can be collapsed, and the **Apply** button remains visible in the footer for both individual and multiple-keygroup editing.
 
 The program name in the editor header is intentionally read-only. It is the program’s internal P9 identity, not an ordinary label. Choose the name when creating a program, use **Save Edited Copy…** for a differently named local file, or use **Rename S9/P9…** on a P9 in the IMG browser to change its directory and internal names transactionally.
 
-Soft and Loud sample fields are dropdown menus populated with the S9 samples present in the open volume. **No sample** clears a layer. If an existing P9 references a sample not currently present, that reference remains available in the menu so merely opening the editor cannot lose it. The bulk editor offers the same choices, including **Unchanged**. Choosing a Soft sample updates the selected keygroup’s list name immediately; **Apply** still controls when the complete draft is committed.
+Soft and Loud sample fields are dropdown menus populated with the S9 samples present in the open volume. **No sample** clears a layer. If an existing P9 references a sample not currently present, that reference remains available in the menu so merely opening the editor cannot lose it. The multi-keygroup editor displays the same choices, including **Unchanged**, but the known application fault means those controls must not be relied upon for more than one selected keygroup in this release.
 
 Use **Add** below the keygroup list to duplicate the selected keygroup, including all its musical settings. Use **Delete** to remove one or more selected keygroups. The editor always retains at least one keygroup and renumbers the remaining list. Any insertion or deletion clears only the sampler-maintained program/keygroup RAM links affected by structural changes; musical settings, unknown bytes and undocumented flag bits remain intact.
 

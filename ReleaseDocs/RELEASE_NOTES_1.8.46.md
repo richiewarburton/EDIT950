@@ -1,6 +1,10 @@
 # EDIT950 1.8.46 (build 67)
 
-EDIT950 1.8.46 fixes the bulk P9 Release edit demonstrated against a real IMG.
+> Superseded test conclusion: subsequent live testing found that bulk edits are
+> not reliable for any selection of more than one keygroup. See
+> [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
+
+EDIT950 1.8.46 revised the controls used for bulk P9 edits.
 
 ## Fixed
 
@@ -8,15 +12,16 @@ EDIT950 1.8.46 fixes the bulk P9 Release edit demonstrated against a real IMG.
   native **Unchanged / Set / Adjust** control.
 - Choosing **Set** now reliably activates the numeric value and enables
   **Apply to Keygroups**.
-- Setting Amplitude ENV Release to `0` now changes every selected keygroup and
-  survives P9 encoding, IMG overwrite and reopen.
+- The generated editor-model fixture can set and encode Release `0`, but the
+  real multi-keygroup workflow remains unreliable.
 
 ## Regression coverage
 
 - Added a generated 41-keygroup P9 fixture; no private sampler image is bundled.
-- The rendered editor test selects all 41 keygroups, chooses **Set** for
-  Amplitude ENV Release, applies zero through the editor's default Apply action,
-  encodes the result and reopens it.
-- The regression fails unless all 41 decoded Release values are exactly zero.
+- The rendered editor-model fixture starts with all 41 keygroups preselected,
+  chooses **Set** for Amplitude ENV Release, applies zero through the default
+  Apply action, encodes the result and reopens it.
+- The fixture fails unless all 41 decoded Release values are exactly zero. It
+  does not reproduce the unreliable live multi-selection path.
 - Existing byte-level bulk-edit, P9 serialization and IMG write-verification
   tests remain in the normal suite.

@@ -24,15 +24,18 @@ keygroup-channel routing, repeated and channel-isolated notes, source-isolated c
 keys, eight-voice stealing, Soft-layer tuning, Constant Pitch, looping,
 amplitude/filter envelopes, velocity and keyboard tracking, program teardown,
 audio-engine self-recovery on Note On and Panic, byte-preserving keygroup
-reordering, explicit bulk Set/Adjust activation, zero-value bulk edits and
+reordering, bulk-edit model operations, zero-value serialization and
 bounded on-screen diagnostic rendering.
 It also verifies that bandwidth conversion scales loop endpoints to the
 converted WAV's measured frame count, keeps current audition playback alive
 until the new preview is ready, and exposes the Finder association controls for
 IMG, P9 and S9. The current accepted run completed with **90 passed and 0
-failed**, followed by a rendered 41-keygroup bulk-Release regression that
-starts with one selected keygroup, invokes **Select All Keygroups** with
-Command-A, selects Set, applies zero, encodes and reopens the edited P9.
+failed**, followed by a rendered, preselected 41-keygroup bulk-Release fixture
+that selects Set, applies zero to the generated editor model, encodes and
+reopens the edited P9. That deterministic fixture does not prove the live
+multi-selection UI workflow: bulk edits made through the real editor remain
+unreliable for any selection of more than one keygroup and are tracked in
+[issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
 
 The following broader checks are also available:
 
@@ -112,6 +115,9 @@ Automated and manual checks confirm that:
 - packaged executables contain no development home-directory paths.
 
 ## Release status
+
+Known release limitation: do not rely on a bulk P9 edit when more than one
+keygroup is selected. Edit one keygroup at a time and verify the reopened P9.
 
 The local build is ad-hoc signed, not Developer ID signed or notarized. A
 packaged public release should be regenerated after source or release-document

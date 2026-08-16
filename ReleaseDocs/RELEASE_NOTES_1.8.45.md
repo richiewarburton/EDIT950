@@ -1,5 +1,9 @@
 # EDIT950 1.8.45 (build 66)
 
+> Superseded test conclusion: subsequent live testing found that bulk edits are
+> not reliable for any selection of more than one keygroup. See
+> [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
+
 EDIT950 1.8.45 completes the current audition, IMG-management and P9-editing
 work as one release candidate.
 
@@ -32,8 +36,8 @@ work as one release candidate.
 
 - Bulk numeric fields now have one aligned **Unchanged / Set / Adjust** menu.
   Choosing Set or Adjust activates the row; Unchanged leaves it alone.
-- Exact zero-value edits, such as setting Release to `0` across every selected
-  keygroup, apply, encode and reopen correctly.
+- Exact zero-value edits are represented by the bulk editor model, but the live
+  multi-keygroup application workflow is not reliable.
 - **Save P9 As…** replaces separate filesystem and in-IMG copy buttons, then
   asks whether to save a standalone P9 or a renamed P9 in the current IMG.
 - Saving a renamed copy or deliberately overwriting the current P9 remains

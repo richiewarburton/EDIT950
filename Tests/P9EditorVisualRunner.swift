@@ -85,7 +85,7 @@ struct P9EditorVisualRunner {
                 contentSize = P9EditorSheet.presentationSize(
                     for: suitePreferences.zoom
                 )
-                let initialSelection = mode == "--all"
+                let initialSelection = mode == "--all" || mode == "--bulk-release"
                     ? Set(document.program.keygroups.indices)
                     : nil
                 root = AnyView(
@@ -167,23 +167,6 @@ struct P9EditorVisualRunner {
         guard let root = window.contentView else {
             throw P9EditorVisualFailure.bulkReleaseControls
         }
-
-        guard let selectAll = NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: [.command],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber,
-            context: nil,
-            characters: "a",
-            charactersIgnoringModifiers: "a",
-            isARepeat: false,
-            keyCode: 0
-        ) else {
-            throw P9EditorVisualFailure.bulkReleaseControls
-        }
-        NSApp.sendEvent(selectAll)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
 
         let valueField = root.descendant(
                 accessibilityIdentifier: "p9-bulk-amplitude-release-value"

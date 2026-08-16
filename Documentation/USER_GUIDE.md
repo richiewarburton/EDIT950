@@ -22,8 +22,10 @@ This guide assumes macOS 14 or later.
 2. Open the app. If macOS blocks the first launch, Control-click the app, choose
    **Open**, then confirm.
 3. The launch screen lists recent IMGs. Use **Load** to reopen one, or **Create
-   Copy and Load** to make a byte-verified working copy first. **Open in FIND**,
-   **Send to PLAY** and **Create New** are available from the same screen.
+   Copy and Load** to make a byte-verified working copy first. **Create New** is
+   available from the same screen. After an IMG is loaded, use **Open in FIND**
+   or **Send to PLAY** in its inspector sidebar; those actions always target the
+   currently loaded image.
 4. You can also drag an `.img` file onto the window or choose **Open Image**.
 5. For an irreplaceable archive, leave **Open read-only** switched on at first.
 
@@ -202,23 +204,20 @@ actions remain available even when the program is unchanged, which is useful
 for making a verified duplicate or deliberately rewriting a suspect directory
 entry.
 
-## Make broad musical changes quickly
+## Editing more than one keygroup
 
-The program editor can work on more than one keygroup at once. This is useful
-for jobs such as:
+The program editor displays bulk Set/Adjust controls when more than one
+keygroup is selected. In 1.8.47, applying those controls is not reliable for
+any selection of more than one keygroup. The limitation is not confined to the
+Release field or to Select All.
 
-- making the whole program brighter or darker;
-- lengthening every release;
-- moving several zones to another output;
-- changing tuning across a layered instrument; or
-- spreading a group of samples chromatically.
+Until [issue #6](https://github.com/richiewarburton/EDIT950/issues/6) is resolved,
+edit one keygroup at a time and verify the saved program after reopening it.
+Do not rely on **Apply to Keygroups** for a multi-keygroup selection in this
+release.
 
-Select the zones you want, then choose **Set** or **Adjust** beside each field
-that should change. **Unchanged** fields are left alone. Set writes the displayed
-value to every selected keygroup; Adjust adds or subtracts it. Choose **Apply to
-Keygroups**, audition the result, then save it. A value such as Release `0` is a
-real active edit once its operation menu says Set—it is no longer hidden behind
-a separate checkbox.
+The visual controls remain present so the affected workflow can be diagnosed;
+their presence is not a guarantee that every selected keygroup will change.
 
 ## Import and export WAV files
 

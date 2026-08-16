@@ -34,14 +34,26 @@ Current source version: **1.8.47 (build 68)**. Requires macOS 14 or later.
 
 ### What is new in 1.8.47
 
-- Command-A in the P9 editor now selects every keygroup rather than leaving the
-  previous partial selection active.
-- The **Select All Keygroups** menu item and Command-A use the same explicit
-  selection action, so a subsequent bulk edit targets the count shown by
-  **Apply to … Keygroups**.
-- The rendered regression now begins with one keygroup selected, invokes
-  Command-A, applies Amplitude ENV Release `0`, then encodes and reopens the P9
-  and requires all 41 Release bytes to be zero.
+- Audition a chosen P9 from the main IMG browser using external MIDI or the
+  computer keyboard, independently of ordinary table selection, with visible
+  note activity and a yellow spot on the triggered S9 row.
+- Play every prepared S9 from its row icon or the Space bar, retain currently
+  playing audio during bandwidth conversion, and recover the audition engine
+  after an interruption.
+- Associate IMG, P9 and S9 files from Settings, close an IMG explicitly, and
+  see its filename, path, access mode and P9/S9 counts in the header.
+- Use the reorganized audition header, direct GitHub user-manual link and manual
+  GitHub release check. Companion-app handoffs now belong to the loaded IMG's
+  inspector.
+- Use one **Save P9 As…** action for a standalone or renamed in-IMG copy, and
+  deliberately duplicate or overwrite an unchanged program with the existing
+  verification safeguards.
+
+> **Known issue:** bulk P9 edits are not reliable when more than one keygroup is
+> selected. This affects every field and every way of making a multi-keygroup
+> selection, not only Release or Select All. Edit one keygroup at a time in this
+> release. Progress is tracked in
+> [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
 
 See [the complete 1.8.47 release notes](ReleaseDocs/RELEASE_NOTES_1.8.47.md)
 for every fix and validation result.
@@ -150,9 +162,9 @@ and optional input-only MIDI triggering.*
 - Open a P9 from an IMG or directly from Finder.
 - See its keygroups, Soft/Loud layers, key and velocity ranges, tuning, filter,
   amplitude/VCF envelopes, MIDI channel and output routing.
-- Edit one keygroup or apply controlled bulk changes to several.
-- Activate each bulk field explicitly with Unchanged, Set or Adjust, including
-  exact zero-value edits across every selected keygroup.
+- Edit one keygroup at a time. The editor exposes multi-keygroup Set/Adjust
+  controls, but their application is a known issue in this release and should
+  not be relied upon for more than one selected keygroup.
 - Spread samples chromatically with tuning compensation.
 - Rename an S9 and update every matching Soft and Loud reference.
 - Copy keygroups and their linked samples between writable IMG files.
@@ -259,6 +271,9 @@ built-in safety path.
 
 ## Current limitations
 
+- Bulk P9 edits are not reliable when more than one keygroup is selected. Edit
+  one keygroup at a time and follow
+  [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
 - Physical disks and drives are not supported directly.
 - HFE, SCP and raw flux capture formats require conversion to a supported image.
 - Ableton import supports one distinct sample zone per occupied Sampler or
