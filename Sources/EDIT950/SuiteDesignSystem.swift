@@ -329,8 +329,8 @@ struct SuiteBrandHeader: View {
                 .resizable().interpolation(.high)
                 .frame(width: 34, height: 34)
             VStack(alignment: .leading, spacing: 2) {
-                Text(product).font(SuiteFont.bold(15)).tracking(4.1)
-                Text(purpose.uppercased()).font(SuiteFont.regular(9)).tracking(1.4)
+                Text(product).font(SuiteFont.bold(17)).tracking(4.1)
+                Text(purpose.uppercased()).font(SuiteFont.regular(11)).tracking(1.4)
                     .foregroundStyle(Color.suiteUnit)
             }
             Spacer()
@@ -437,9 +437,9 @@ private enum SuiteFontGateError: LocalizedError {
 
 struct SuiteSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(SuiteFont.regular(11)).tracking(1.98).textCase(.uppercase)
+        configuration.label.font(SuiteFont.regular(12)).tracking(1.4).textCase(.uppercase)
             .foregroundStyle(configuration.isPressed ? Color.suiteInk : Color.suiteLabel)
-            .padding(.horizontal, 12).frame(minHeight: 30)
+            .padding(.horizontal, 12).frame(minHeight: 34)
             .background(configuration.isPressed ? Color.suiteSlab2 : Color.suiteSlab)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.suiteRule2, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 6))
@@ -450,8 +450,8 @@ enum SuitePrimaryRole { case neutral, sample, program, destructive }
 struct SuitePrimaryButtonStyle: ButtonStyle {
     let role: SuitePrimaryRole
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.font(SuiteFont.medium(11)).tracking(1.98).textCase(.uppercase).foregroundStyle(foreground)
-            .padding(.horizontal, 14).frame(minHeight: 32).background(background)
+        configuration.label.font(SuiteFont.medium(12)).tracking(1.4).textCase(.uppercase).foregroundStyle(foreground)
+            .padding(.horizontal, 14).frame(minHeight: 36).background(background)
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(role == .neutral ? Color.suiteRule2 : foreground.opacity(configuration.isPressed ? 0.45 : 0), lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 6)).opacity(configuration.isPressed ? 0.9 : 1)
     }
@@ -467,10 +467,10 @@ struct SuiteMenuLabel: View {
         HStack(spacing: 7) {
             if let systemImage { Image(systemName: systemImage) }
             Text(title.uppercased()).lineLimit(1)
-            if let badge, badge > 0 { Text(badge.formatted()).font(SuiteFont.regular(9)).padding(.horizontal, 4).background(Color.suiteSlab3, in: RoundedRectangle(cornerRadius: 3)) }
-            Image(systemName: "chevron.down").font(SuiteFont.regular(9)).frame(width: 22).padding(.vertical, 7).background(Color.suiteSlab2)
+            if let badge, badge > 0 { Text(badge.formatted()).font(SuiteFont.regular(11)).padding(.horizontal, 4).background(Color.suiteSlab3, in: RoundedRectangle(cornerRadius: 3)) }
+            Image(systemName: "chevron.down").font(SuiteFont.regular(11)).frame(width: 22).padding(.vertical, 7).background(Color.suiteSlab2)
         }
-        .font(SuiteFont.regular(11)).tracking(1.4).foregroundStyle(Color.suiteInk).padding(.leading, 10)
+        .font(SuiteFont.regular(12)).tracking(1.2).foregroundStyle(Color.suiteInk).padding(.leading, 10)
         .background(Color.suiteSlab).clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
@@ -480,7 +480,7 @@ struct SuiteSectionHeader: View {
     var accent: Color? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(title.uppercased()).font(SuiteFont.medium(11)).tracking(2.64).foregroundStyle(Color.suiteLabel)
+            Text(title.uppercased()).font(SuiteFont.medium(12)).tracking(2).foregroundStyle(Color.suiteLabel)
             Rectangle().fill(accent ?? Color.suiteRule).frame(height: accent == nil ? 1 : 3)
         }
     }
@@ -517,7 +517,7 @@ struct SuiteIMGCapacityMeter: View {
                 )
                 .foregroundStyle(meterColour)
             }
-            .font(SuiteFont.regular(7))
+            .font(SuiteFont.regular(10))
             .tracking(0.55)
             .foregroundStyle(Color.suiteUnit)
 

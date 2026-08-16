@@ -315,6 +315,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
     }
 }
 
+@MainActor
 struct P9EditorSheet: View {
     static let baseSize = CGSize(width: 1240, height: 800)
 
@@ -327,6 +328,8 @@ struct P9EditorSheet: View {
     }
 
     @ObservedObject var document: P9EditorDocument
+    @ObservedObject var audition: ProgramAuditionController
+    let auditionSamples: [String: ProgramAuditionSample]
     let keygroupTransfer: P9KeygroupTransfer?
     let onCopyKeygroups: ((P9Program, Set<Int>, P9EditorDocument.Source) -> Void)?
     let onPasteKeygroups: ((P9EditorDocument) -> Void)?
@@ -353,14 +356,14 @@ struct P9EditorSheet: View {
     @State private var spreadSettings = P9SpreadSettings()
     @State private var message: String?
     @State private var errorMessage: String?
-    @State private var midiMonitoringEnabled = true
     @State private var keygroupSelectionAnchor: Int?
     @State private var draggedKeygroupOffsets = IndexSet()
     @State private var keygroupDropTarget: P9KeygroupDropTarget?
-    @StateObject private var midiMonitor = MIDIKeygroupMonitor()
 
     init(
         document: P9EditorDocument,
+        audition: ProgramAuditionController,
+        auditionSamples: [String: ProgramAuditionSample] = [:],
         initialSelection: Set<Int>? = nil,
         showSpreadInitially: Bool = false,
         showOverwriteConfirmationInitially: Bool = false,
@@ -376,6 +379,8 @@ struct P9EditorSheet: View {
             ((AbletonDrumRackImportDraft, P9EditorDocument) -> Void)? = nil
     ) {
         self.document = document
+        self.audition = audition
+        self.auditionSamples = auditionSamples
         self.keygroupTransfer = keygroupTransfer
         self.onCopyKeygroups = onCopyKeygroups
         self.onPasteKeygroups = onPasteKeygroups
@@ -418,6 +423,11 @@ struct P9EditorSheet: View {
                         || document.isImportingDrumRack
                 )
             Divider()
+            ProgramAuditionControlStrip(
+                controller: audition,
+                indicatedSampleNames: indicatedEditorSampleNames
+            )
+            Divider()
             HStack(spacing: 0) {
                 keygroupList
                     .frame(width: 240)
@@ -454,15 +464,11 @@ struct P9EditorSheet: View {
             bulkEdits = P9BulkEdits()
         }
         .onAppear {
-            if midiMonitoringEnabled { midiMonitor.start() }
+            audition.activateEditor(preparedAuditionProgram)
         }
-        .onDisappear { midiMonitor.stop() }
-        .onChange(of: midiMonitoringEnabled) { _, enabled in
-            if enabled {
-                midiMonitor.start()
-            } else {
-                midiMonitor.stop()
-            }
+        .onDisappear { audition.deactivateEditor() }
+        .onChange(of: document.program) { _, _ in
+            audition.updateEditor(preparedAuditionProgram)
         }
         .alert("P9 Editor", isPresented: Binding(
             get: {
@@ -612,23 +618,22 @@ struct P9EditorSheet: View {
             Toggle("Positional crossfade", isOn: positionalCrossfadeBinding)
             Divider()
                 .frame(height: 20)
-            Toggle("MIDI monitor", isOn: $midiMonitoringEnabled)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(midiMonitor.lastEventDescription)
-                    .font(SuiteFont.regular(10)).monospacedDigit()
-                    .foregroundStyle(
-                        midiMonitor.activeNotes.isEmpty
-                            ? Color.suiteUnit : Color.suiteBlue
-                    )
-                if let error = midiMonitor.errorMessage {
-                    Text(error)
-                        .font(SuiteFont.regular(9))
-                        .foregroundStyle(Color.suiteRed)
-                }
-            }
-            .frame(minWidth: 190, alignment: .trailing)
         }
         .padding(12)
+    }
+
+    private var preparedAuditionProgram: PreparedProgramAudition {
+        PreparedProgramAudition(
+            program: document.program,
+            availableSamples: auditionSamples
+        )
+    }
+
+    private var indicatedEditorSampleNames: [String] {
+        auditionSamples.values.compactMap { sample in
+            audition.indicatedSampleIDs.contains(sample.fileID)
+                ? sample.normalizedName : nil
+        }.sorted()
     }
 
     private var keygroupList: some View {
@@ -651,10 +656,7 @@ struct P9EditorSheet: View {
                     HStack {
                         Circle()
                             .fill(
-                                MIDIKeygroupTriggerMatcher.matches(
-                                    keygroup,
-                                    activeNotes: midiMonitor.activeNotes
-                                )
+                                audition.isKeygroupHeld(keygroup)
                                     ? isSelected ? Color.suiteYellow : Color.suiteBlue
                                     : Color.clear
                             )
@@ -701,10 +703,7 @@ struct P9EditorSheet: View {
                             .fill(
                                 isSelected
                                     ? Color.suiteBlue
-                                    : MIDIKeygroupTriggerMatcher.matches(
-                                        keygroup,
-                                        activeNotes: midiMonitor.activeNotes
-                                    )
+                                    : audition.isKeygroupHeld(keygroup)
                                         ? Color.suiteSlab3
                                         : Color.clear
                             )

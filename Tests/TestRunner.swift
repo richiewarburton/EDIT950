@@ -1,3 +1,4 @@
+import AppKit
 import AVFoundation
 import Foundation
 
@@ -1034,6 +1035,729 @@ struct TestRunner {
                     sustainsThroughNoteOff: true
                 ) == .stop
             )
+        }
+
+        test("computer MIDI keyboard matches Ableton notes octave and velocity controls") {
+            let expected: [String: Int] = [
+                "a": 60, "w": 61, "s": 62, "e": 63, "d": 64, "f": 65,
+                "t": 66, "g": 67, "y": 68, "h": 69, "u": 70, "j": 71,
+                "k": 72, "o": 73, "l": 74, "p": 75
+            ]
+            for (key, note) in expected {
+                try expect(ComputerMIDIKeyboardMapping.note(for: key, octave: 0) == note)
+                try expect(ComputerMIDIKeyboardMapping.note(for: key, octave: 1) == note + 12)
+            }
+            try expect(ComputerMIDIKeyboardMapping.adjustedOctave(0, key: "z") == -1)
+            try expect(ComputerMIDIKeyboardMapping.adjustedOctave(0, key: "x") == 1)
+            try expect(ComputerMIDIKeyboardMapping.adjustedVelocity(100, key: "c") == 80)
+            try expect(ComputerMIDIKeyboardMapping.adjustedVelocity(100, key: "v") == 120)
+            try expect(ComputerMIDIKeyboardMapping.adjustedVelocity(1, key: "c") == 1)
+            try expect(ComputerMIDIKeyboardMapping.adjustedVelocity(120, key: "v") == 127)
+            try expect(ComputerMIDIKeyboardMapping.note(for: "q", octave: 0) == nil)
+        }
+
+        test("program audition targets the selected P9 keygroup channel") {
+            let sample = makeProgramAuditionSample()
+            let keygroup = makeProgramAuditionKeygroup(
+                lowKey: 60,
+                highKey: 60,
+                midiChannelOffset: 2
+            )
+            let program = PreparedProgramAudition(
+                name: "CHANNELS",
+                samples: [sample],
+                keygroups: [keygroup]
+            )
+            try expect(
+                program.matchingKeygroupIndex(
+                    channel: 2,
+                    note: 60,
+                    omni: false,
+                    selectedMIDIChannel: 2
+                ) == 0
+            )
+            try expect(
+                program.matchingKeygroupIndex(
+                    channel: 1,
+                    note: 60,
+                    omni: false,
+                    selectedMIDIChannel: 2
+                ) == nil
+            )
+            var pool = ProgramAuditionVoicePool()
+            pool.setProgram(program)
+            pool.setHostSampleRate(48_000)
+            pool.setMIDIReception(omni: false, selectedMIDIChannel: 2)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 1,
+                pitch: 60,
+                noteID: 1,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 0)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 2,
+                pitch: 60,
+                noteID: 2,
+                velocity: 127
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 2,
+                pitch: 60,
+                noteID: 3,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 2)
+            pool.noteOff(source: .externalMIDI, channel: 2, noteID: 2)
+            try expect(!pool.isNoteActive(source: .externalMIDI, channel: 2, noteID: 2))
+            try expect(pool.isNoteActive(source: .externalMIDI, channel: 2, noteID: 3))
+            pool.noteOff(source: .computerKeyboard, channel: 2, noteID: 3)
+            try expect(pool.isNoteActive(source: .externalMIDI, channel: 2, noteID: 3))
+        }
+
+        test("program audition has eight voices deterministic stealing and one-shot note-off") {
+            let sample = makeProgramAuditionSample()
+            var pool = ProgramAuditionVoicePool()
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "VOICES",
+                    samples: [sample],
+                    keygroups: [makeProgramAuditionKeygroup(lowKey: 0, highKey: 127)]
+                )
+            )
+            pool.setHostSampleRate(48_000)
+            for noteID in 1...8 {
+                pool.noteOn(
+                    source: .externalMIDI,
+                    channel: 0,
+                    pitch: 60 + noteID,
+                    noteID: UInt64(noteID),
+                    velocity: 127
+                )
+            }
+            try expect(pool.activeVoiceCount == 8)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 70,
+                noteID: 9,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 8)
+            try expect(!pool.isNoteActive(source: .externalMIDI, channel: 0, noteID: 1))
+            try expect(pool.isNoteActive(source: .externalMIDI, channel: 0, noteID: 9))
+
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "ONE SHOT",
+                    samples: [sample],
+                    keygroups: [makeProgramAuditionKeygroup(oneShot: true)]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 20,
+                velocity: 127
+            )
+            pool.noteOff(source: .externalMIDI, channel: 0, noteID: 20)
+            try expect(pool.isNoteActive(source: .externalMIDI, channel: 0, noteID: 20))
+        }
+
+        test("program audition ports reverse alternating constant-pitch and velocity loudness") {
+            var reverse = makeProgramAuditionSample(
+                samples: [0, 0.125, 0.25, 0.375],
+                playbackMode: .oneShot,
+                playbackDirection: .reverse
+            )
+            var pool = ProgramAuditionVoicePool()
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "REVERSE",
+                    samples: [reverse],
+                    keygroups: [makeProgramAuditionKeygroup(
+                        lowKey: 0,
+                        highKey: 127,
+                        constantPitch: true
+                    )]
+                )
+            )
+            pool.setHostSampleRate(48_000)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 72,
+                noteID: 1,
+                velocity: 127
+            )
+            let reverseOutput = renderProgramAudition(&pool, frames: 4)
+            try expect(abs(reverseOutput[0] - 0.375) < 0.0001)
+            try expect(abs(reverseOutput[1] - 0.25) < 0.0001)
+            try expect(abs(reverseOutput[2] - 0.125) < 0.0001)
+            try expect(abs(reverseOutput[3]) < 0.0001)
+
+            reverse = makeProgramAuditionSample(
+                samples: [0, 0.125, 0.25, 0.375],
+                loopStart: 1,
+                playbackMode: .alternatingLoop
+            )
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "ALTERNATING",
+                    samples: [reverse],
+                    keygroups: [makeProgramAuditionKeygroup(constantPitch: true)]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 2,
+                velocity: 127
+            )
+            let alternating = renderProgramAudition(&pool, frames: 8)
+            let expected: [Float] = [0, 0.125, 0.25, 0.375, 0.25, 0.125, 0.25, 0.375]
+            for index in expected.indices {
+                try expect(abs(alternating[index] - expected[index]) < 0.0001)
+            }
+
+            let constant = makeProgramAuditionSample(
+                samples: Array(repeating: 1, count: 128),
+                playbackMode: .loop
+            )
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "VELOCITY",
+                    samples: [constant],
+                    keygroups: [makeProgramAuditionKeygroup(velocityToLoudness: 99)]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 3,
+                velocity: 127
+            )
+            let full = renderProgramAudition(&pool, frames: 1)[0]
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "VELOCITY",
+                    samples: [constant],
+                    keygroups: [makeProgramAuditionKeygroup(velocityToLoudness: 99)]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 4,
+                velocity: 20
+            )
+            let quiet = renderProgramAudition(&pool, frames: 1)[0]
+            try expect(full > quiet * 5)
+        }
+
+        test("program audition ports tuning amplitude envelope and filter modulation") {
+            let ramp = makeProgramAuditionSample()
+            var pool = ProgramAuditionVoicePool()
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "TUNING",
+                    samples: [ramp],
+                    keygroups: [makeProgramAuditionKeygroup(
+                        softTuningSixteenths: 192
+                    )]
+                )
+            )
+            pool.setHostSampleRate(48_000)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 1,
+                velocity: 127
+            )
+            let tuned = renderProgramAudition(&pool, frames: 2)
+            try expect(abs(tuned[1] - 0.25) < 0.0001)
+
+            let sustained = makeProgramAuditionSample(
+                samples: Array(repeating: 1, count: 2_048),
+                sampleRate: 1_000
+            )
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "ENVELOPE",
+                    samples: [sustained],
+                    keygroups: [makeProgramAuditionKeygroup(
+                        amplitudeEnvelope: P9Envelope(
+                            attack: 50,
+                            decay: 0,
+                            sustain: 99,
+                            release: 50
+                        )
+                    )]
+                )
+            )
+            pool.setHostSampleRate(1_000)
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 2,
+                velocity: 127
+            )
+            let attack = renderProgramAudition(&pool, frames: 1_500)
+            try expect(abs(attack[10]) < abs(attack[1_200]) * 0.2)
+            pool.noteOff(source: .externalMIDI, channel: 0, noteID: 2)
+            try expect(pool.activeVoiceCount == 1)
+            _ = renderProgramAudition(&pool, frames: 1_000)
+            try expect(pool.activeVoiceCount == 0)
+
+            func filteredRMS(
+                _ keygroup: PreparedProgramAuditionKeygroup,
+                velocity: Int,
+                pitch: Int = 60
+            ) -> Float {
+                let signal = makeProgramAuditionSample(
+                    samples: [0.5, -0.5],
+                    playbackMode: .loop
+                )
+                var filteredPool = ProgramAuditionVoicePool()
+                var ranged = keygroup
+                ranged = PreparedProgramAuditionKeygroup(
+                    lowKey: pitch,
+                    highKey: pitch,
+                    sampleIndex: ranged.sampleIndex,
+                    softTuningSixteenths: ranged.softTuningSixteenths,
+                    oneShot: ranged.oneShot,
+                    constantPitch: ranged.constantPitch,
+                    amplitudeEnvelope: ranged.amplitudeEnvelope,
+                    filterEnvelope: ranged.filterEnvelope,
+                    filterEnvelopeAmount: ranged.filterEnvelopeAmount,
+                    velocityToLoudness: ranged.velocityToLoudness,
+                    velocityToFilter: ranged.velocityToFilter,
+                    keyboardToFilter: ranged.keyboardToFilter,
+                    softFilter: ranged.softFilter,
+                    softLoudness: ranged.softLoudness,
+                    midiChannelOffset: ranged.midiChannelOffset
+                )
+                filteredPool.setProgram(
+                    PreparedProgramAudition(
+                        name: "FILTER",
+                        samples: [signal],
+                        keygroups: [ranged]
+                    )
+                )
+                filteredPool.setHostSampleRate(48_000)
+                filteredPool.noteOn(
+                    source: .externalMIDI,
+                    channel: 0,
+                    pitch: pitch,
+                    noteID: 1,
+                    velocity: velocity
+                )
+                let output = renderProgramAudition(&filteredPool, frames: 4_096)
+                let energy = output[2_048...].reduce(0.0) {
+                    $0 + Double($1 * $1)
+                }
+                return Float(sqrt(energy / 2_048))
+            }
+
+            let closed = makeProgramAuditionKeygroup(softFilter: 0)
+            let open = makeProgramAuditionKeygroup(softFilter: 99)
+            try expect(filteredRMS(open, velocity: 127) > filteredRMS(closed, velocity: 127) * 20)
+
+            let velocityFilter = makeProgramAuditionKeygroup(
+                velocityToFilter: 99,
+                softFilter: 50
+            )
+            try expect(
+                filteredRMS(velocityFilter, velocity: 127)
+                    > filteredRMS(velocityFilter, velocity: 20) * 5
+            )
+
+            let envelopeFilter = makeProgramAuditionKeygroup(
+                filterEnvelope: P9Envelope(attack: 0, decay: 0, sustain: 99, release: 0),
+                filterEnvelopeAmount: 50,
+                softFilter: 30
+            )
+            let neutralFilter = makeProgramAuditionKeygroup(softFilter: 30)
+            try expect(
+                filteredRMS(envelopeFilter, velocity: 127)
+                    > filteredRMS(neutralFilter, velocity: 127) * 10
+            )
+
+            let keyboardFilter = makeProgramAuditionKeygroup(
+                lowKey: 0,
+                highKey: 127,
+                constantPitch: true,
+                keyboardToFilter: 50,
+                softFilter: 50
+            )
+            try expect(
+                filteredRMS(keyboardFilter, velocity: 127, pitch: 72)
+                    > filteredRMS(keyboardFilter, velocity: 127, pitch: 48) * 10
+            )
+        }
+
+        test("program audition rejects missing or invalid Soft samples and clears on program change") {
+            let valid = makeProgramAuditionSample()
+            var missingKeygroup = makeProgramAuditionKeygroup()
+            missingKeygroup = PreparedProgramAuditionKeygroup(
+                lowKey: missingKeygroup.lowKey,
+                highKey: missingKeygroup.highKey,
+                sampleIndex: nil,
+                softTuningSixteenths: missingKeygroup.softTuningSixteenths,
+                oneShot: missingKeygroup.oneShot,
+                constantPitch: missingKeygroup.constantPitch,
+                amplitudeEnvelope: missingKeygroup.amplitudeEnvelope,
+                filterEnvelope: missingKeygroup.filterEnvelope,
+                filterEnvelopeAmount: missingKeygroup.filterEnvelopeAmount,
+                velocityToLoudness: missingKeygroup.velocityToLoudness,
+                velocityToFilter: missingKeygroup.velocityToFilter,
+                keyboardToFilter: missingKeygroup.keyboardToFilter,
+                softFilter: missingKeygroup.softFilter,
+                softLoudness: missingKeygroup.softLoudness,
+                midiChannelOffset: missingKeygroup.midiChannelOffset
+            )
+            var pool = ProgramAuditionVoicePool()
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "MISSING",
+                    samples: [valid],
+                    keygroups: [missingKeygroup]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 1,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 0)
+
+            let invalid = makeProgramAuditionSample(samples: [])
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "INVALID",
+                    samples: [invalid],
+                    keygroups: [makeProgramAuditionKeygroup()]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 2,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 0)
+
+            pool.setProgram(
+                PreparedProgramAudition(
+                    name: "VALID",
+                    samples: [valid],
+                    keygroups: [makeProgramAuditionKeygroup()]
+                )
+            )
+            pool.noteOn(
+                source: .externalMIDI,
+                channel: 0,
+                pitch: 60,
+                noteID: 3,
+                velocity: 127
+            )
+            try expect(pool.activeVoiceCount == 1)
+            pool.setProgram(nil)
+            try expect(pool.activeVoiceCount == 0)
+        }
+
+        await asyncTest("live input feedback keeps MIDI and computer keys source isolated") {
+            try await MainActor.run {
+                let controller = ProgramAuditionController()
+                controller.setMainProgram(
+                    PreparedProgramAudition(
+                        name: "FEEDBACK",
+                        samples: [makeProgramAuditionSample()],
+                        keygroups: [makeProgramAuditionKeygroup()]
+                    )
+                )
+                controller.setHardwareMIDIEnabled(true)
+                controller.receiveExternalMIDI(
+                    .noteOn(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 90
+                    )
+                )
+                try expect(controller.heldNotes.count == 1)
+                try expect(controller.visibleNotes.count == 1)
+                try expect(controller.recentlyTriggeredSampleIDs == ["TEST.S9"])
+                try expect(controller.heldNotes[0].source == .externalMIDI)
+                try expect(controller.heldNotes[0].summary.contains("CH 1"))
+
+                controller.setComputerKeyboardEnabled(true)
+                guard let keyDown = NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    isARepeat: false,
+                    keyCode: 0
+                ), let keyUp = NSEvent.keyEvent(
+                    with: .keyUp,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    isARepeat: false,
+                    keyCode: 0
+                ) else {
+                    throw TestFailure.fixture
+                }
+                try expect(controller.handleComputerKeyDown(keyDown))
+                try expect(controller.heldNotes.count == 2)
+                try expect(
+                    controller.heldNotes.contains {
+                        $0.source == .computerKeyboard
+                            && $0.physicalKey == "A"
+                            && $0.note == 60
+                    }
+                )
+                controller.receiveExternalMIDI(
+                    .noteOff(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 0
+                    )
+                )
+                try expect(controller.heldNotes.count == 1)
+                try expect(controller.heldNotes[0].source == .computerKeyboard)
+                try expect(controller.handleComputerKeyUp(keyUp))
+                try expect(controller.heldNotes.isEmpty)
+                try expect(controller.visibleNotes.count == 1)
+                try expect(controller.visibleNotes[0].source == .computerKeyboard)
+                try expect(controller.recentlyTriggeredSampleIDs == ["TEST.S9"])
+
+                controller.receiveExternalMIDI(
+                    .noteOn(
+                        key: MIDINoteKey(channel: 0, note: 20),
+                        velocity: 64
+                    )
+                )
+                try expect(controller.heldNotes.count == 1)
+                try expect(controller.visibleNotes.count == 1)
+                try expect(controller.visibleNotes[0].note == 20)
+                try expect(controller.recentlyTriggeredSampleIDs.isEmpty)
+                try expect(!controller.heldNotes[0].matchedKeygroup)
+                try expect(controller.heldNotes[0].summary.contains("NO KG MATCH"))
+                controller.focusWasLost()
+                try expect(controller.heldNotes.isEmpty)
+                try expect(controller.visibleNotes.isEmpty)
+
+                controller.setMainProgram(
+                    PreparedProgramAudition(
+                        name: "MISSING SOFT",
+                        samples: [],
+                        keygroups: [makeProgramAuditionKeygroup(sampleIndex: nil)]
+                    )
+                )
+                controller.receiveExternalMIDI(
+                    .noteOn(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 100
+                    )
+                )
+                try expect(controller.heldNotes.count == 1)
+                try expect(controller.heldNotes[0].matchedKeygroup)
+                try expect(!controller.heldNotes[0].playableSample)
+                try expect(controller.heldNotes[0].summary.contains("NO PLAYABLE SOFT S9"))
+                controller.panic()
+
+                controller.setMainProgram(
+                    PreparedProgramAudition(
+                        name: "CHANNEL THREE",
+                        samples: [makeProgramAuditionSample()],
+                        keygroups: [makeProgramAuditionKeygroup(midiChannelOffset: 2)]
+                    )
+                )
+                controller.setMIDIChannelSelection(2)
+                controller.receiveExternalMIDI(
+                    .noteOn(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 100
+                    )
+                )
+                try expect(controller.heldNotes.count == 1)
+                try expect(controller.heldNotes[0].channel == 2)
+                try expect(controller.indicatedSampleIDs == ["TEST.S9"])
+                controller.receiveExternalMIDI(
+                    .noteOff(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 0
+                    )
+                )
+                controller.panic()
+                controller.setHardwareMIDIEnabled(false)
+                controller.setComputerKeyboardEnabled(false)
+            }
+        }
+
+        await asyncTest("program audition self-recovers before Note On and from PANIC") {
+            try await MainActor.run {
+                let controller = ProgramAuditionController()
+                var diagnosticEvents: [ProgramAuditionDiagnosticEvent] = []
+                controller.onDiagnosticEvent = { diagnosticEvents.append($0) }
+                controller.setMainProgram(
+                    PreparedProgramAudition(
+                        name: "RECOVERY",
+                        samples: [makeProgramAuditionSample()],
+                        keygroups: [makeProgramAuditionKeygroup()]
+                    )
+                )
+                controller.setComputerKeyboardEnabled(true)
+                try expect(controller.audioEngineRunningForTesting)
+
+                controller.stopAudioEngineForRecoveryTest()
+                try expect(!controller.audioEngineRunningForTesting)
+                guard let keyDown = NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    isARepeat: false,
+                    keyCode: 0
+                ), let keyUp = NSEvent.keyEvent(
+                    with: .keyUp,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "a",
+                    charactersIgnoringModifiers: "a",
+                    isARepeat: false,
+                    keyCode: 0
+                ) else {
+                    throw TestFailure.fixture
+                }
+                try expect(controller.handleComputerKeyDown(keyDown))
+                try expect(controller.audioEngineRunningForTesting)
+                try expect(diagnosticEvents.contains {
+                    $0.message.contains("recovered before Note On")
+                })
+                try expect(controller.handleComputerKeyUp(keyUp))
+
+                controller.stopAudioEngineForRecoveryTest()
+                controller.panic()
+                try expect(controller.audioEngineRunningForTesting)
+                try expect(diagnosticEvents.contains {
+                    $0.message.contains("PANIC restarted")
+                })
+                controller.setComputerKeyboardEnabled(false)
+            }
+        }
+
+        await asyncTest("latest-note feedback and S9 spot update immediately then reset") {
+            try expect(ProgramAuditionController.feedbackHoldDuration == 3)
+            let controller = await MainActor.run {
+                let controller = ProgramAuditionController(feedbackHoldDuration: 0.05)
+                controller.setMainProgram(
+                    PreparedProgramAudition(
+                        name: "LINGER",
+                        samples: [
+                            makeProgramAuditionSample(fileID: "FIRST.S9"),
+                            makeProgramAuditionSample(fileID: "SECOND.S9")
+                        ],
+                        keygroups: [
+                            makeProgramAuditionKeygroup(
+                                lowKey: 60,
+                                highKey: 60,
+                                sampleIndex: 0
+                            ),
+                            makeProgramAuditionKeygroup(
+                                lowKey: 62,
+                                highKey: 62,
+                                sampleIndex: 1
+                            )
+                        ]
+                    )
+                )
+                controller.setHardwareMIDIEnabled(true)
+                controller.receiveExternalMIDI(
+                    .noteOn(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 96
+                    )
+                )
+                controller.receiveExternalMIDI(
+                    .noteOff(
+                        key: MIDINoteKey(channel: 0, note: 60),
+                        velocity: 0
+                    )
+                )
+                return controller
+            }
+            try await MainActor.run {
+                try expect(controller.heldNotes.isEmpty)
+                try expect(controller.visibleNotes.map(\.note) == [60])
+                try expect(controller.indicatedSampleIDs == ["FIRST.S9"])
+
+                controller.setComputerKeyboardEnabled(true)
+                guard let keyDown = NSEvent.keyEvent(
+                    with: .keyDown,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "s",
+                    charactersIgnoringModifiers: "s",
+                    isARepeat: false,
+                    keyCode: 1
+                ), let keyUp = NSEvent.keyEvent(
+                    with: .keyUp,
+                    location: .zero,
+                    modifierFlags: [],
+                    timestamp: 0,
+                    windowNumber: 0,
+                    context: nil,
+                    characters: "s",
+                    charactersIgnoringModifiers: "s",
+                    isARepeat: false,
+                    keyCode: 1
+                ) else {
+                    throw TestFailure.fixture
+                }
+                try expect(controller.handleComputerKeyDown(keyDown))
+                try expect(controller.visibleNotes.map(\.note) == [62])
+                try expect(controller.indicatedSampleIDs == ["SECOND.S9"])
+                try expect(!controller.indicatedSampleIDs.contains("FIRST.S9"))
+                try expect(controller.handleComputerKeyUp(keyUp))
+            }
+            try await Task.sleep(nanoseconds: 90_000_000)
+            try await MainActor.run {
+                try expect(controller.visibleNotes.isEmpty)
+                try expect(controller.recentlyTriggeredSampleIDs.isEmpty)
+                try expect(controller.indicatedSampleIDs.isEmpty)
+                controller.setHardwareMIDIEnabled(false)
+                controller.setComputerKeyboardEnabled(false)
+            }
         }
 
         test("hardware P9 proves Key-filter 0x08 and independent LFO Depth 0x16") {
@@ -2721,6 +3445,86 @@ struct TestRunner {
             data[base + 0x43] = 0
         }
         return data
+    }
+
+    private static func makeProgramAuditionSample(
+        fileID: AkaiFile.ID = "TEST.S9",
+        samples: [Float] = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875],
+        sampleRate: Int = 48_000,
+        loopStart: Int = 0,
+        playbackMode: S9PlaybackMode = .loop,
+        playbackDirection: S9PlaybackDirection = .normal
+    ) -> ProgramAuditionSample {
+        ProgramAuditionSample(
+            fileID: fileID,
+            normalizedName: (fileID as NSString).deletingPathExtension,
+            samples: samples,
+            sampleRate: sampleRate,
+            nominalPitchSixteenths: 60 * 16,
+            playbackStart: 0,
+            playbackEnd: samples.count,
+            loopStart: loopStart,
+            playbackMode: playbackMode,
+            playbackDirection: playbackDirection,
+            loudnessOffset: 0
+        )
+    }
+
+    private static func makeProgramAuditionKeygroup(
+        lowKey: Int = 60,
+        highKey: Int = 60,
+        sampleIndex: Int? = 0,
+        midiChannelOffset: Int = 0,
+        oneShot: Bool = false,
+        constantPitch: Bool = false,
+        velocityToLoudness: Int = 0,
+        softTuningSixteenths: Int = 0,
+        amplitudeEnvelope: P9Envelope = P9Envelope(
+            attack: 0,
+            decay: 0,
+            sustain: 99,
+            release: 0
+        ),
+        filterEnvelope: P9Envelope = P9Envelope(
+            attack: 0,
+            decay: 0,
+            sustain: 99,
+            release: 0
+        ),
+        filterEnvelopeAmount: Int = 0,
+        velocityToFilter: Int = 0,
+        keyboardToFilter: Int = 0,
+        softFilter: Int = 99
+    ) -> PreparedProgramAuditionKeygroup {
+        PreparedProgramAuditionKeygroup(
+            lowKey: lowKey,
+            highKey: highKey,
+            sampleIndex: sampleIndex,
+            softTuningSixteenths: softTuningSixteenths,
+            oneShot: oneShot,
+            constantPitch: constantPitch,
+            amplitudeEnvelope: amplitudeEnvelope,
+            filterEnvelope: filterEnvelope,
+            filterEnvelopeAmount: filterEnvelopeAmount,
+            velocityToLoudness: velocityToLoudness,
+            velocityToFilter: velocityToFilter,
+            keyboardToFilter: keyboardToFilter,
+            softFilter: softFilter,
+            softLoudness: 0,
+            midiChannelOffset: midiChannelOffset
+        )
+    }
+
+    private static func renderProgramAudition(
+        _ pool: inout ProgramAuditionVoicePool,
+        frames: Int
+    ) -> [Float] {
+        var output = [Float](repeating: 0, count: frames)
+        output.withUnsafeMutableBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            pool.renderAdd(left: baseAddress, right: nil, frameCount: frames)
+        }
+        return output
     }
 }
 

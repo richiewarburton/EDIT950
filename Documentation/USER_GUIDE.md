@@ -35,8 +35,16 @@ code.
 ![EDIT950 browsing samples and programs on an IMG](Images/edit950-browser.png)
 
 Samples and programs have different colours and icons. The blue play button
-auditions a sample. The persistent header meter shows used space, free space
-and the percentage of the disk image currently occupied.
+auditions a sample. At the right of the header, EDIT950 shows the open IMG's
+name and full path, whether it is **READ ONLY** or **WRITABLE**, and separate
+totals for all files, P9 programs and S9 samples. The persistent meter beside
+it shows used space, free space and the percentage occupied.
+
+Use the explicit **CLOSE IMG** toolbar button when you want to return to the
+launch screen without quitting EDIT950.
+
+When an IMG opens, each S9 play button becomes active as soon as its audition
+copy is ready. A temporarily pale button is still being prepared.
 
 The lock at the bottom means the IMG is open read-only. You can listen and
 inspect safely, but EDIT950 will not offer actions that change the disk.
@@ -98,7 +106,8 @@ interrupted.
 Bandwidth is best treated by ear. Lower settings use less sampler memory and
 lose more top end; the raw mode can add deliberate grit and aliasing. Prepare
 and audition the preview before saving. Loop endpoints are scaled to the actual
-converted WAV frame count while the preview sample rate is being changed.
+converted WAV frame count while the preview sample rate is being changed. If a
+sample is already playing, it continues until the converted preview is ready.
 
 ![S950 sampling bandwidth and projected IMG use](Images/edit950-bandwidth-editor.png)
 
@@ -132,9 +141,55 @@ the musical questions on the right:
 The **Soft Sample** is the normal or lower-velocity sound. Expand **Loud Sample**
 when the program uses a second layer for harder playing.
 
-Turn on **MIDI Monitor** if you want incoming notes from a connected keyboard to
-highlight the matching zones. It listens only; it does not send MIDI or make
-sound by itself.
+Use the same audition strip above the main IMG table or inside the P9 editor:
+
+- **MIDI AUDITION** listens to a connected controller.
+- **COMPUTER MIDI KEYBOARD** turns the Mac keyboard into note input.
+- **Omni** ignores each keygroup's MIDI-channel field. Choosing **KG CH 1–16**
+  auditions keygroups programmed for that displayed P9 channel. Both a physical
+  MIDI controller and the computer keyboard are routed to the chosen channel.
+- **Panic** releases and safely clears all active notes. If the audition audio
+  engine has stopped, Panic restarts it too.
+
+The computer layout matches Ableton Live. A, W, S, E, D, F, T, G, Y, H, U, J,
+K, O, L and P play consecutive notes from C; Z/X lower or raise the octave and
+C/V lower or raise velocity. These keys are ignored while typing in a text
+field.
+
+Choose the main-screen P9 from **AUDITION PROGRAM**. This dropdown is independent
+of table selection, so you can browse, tag, edit or export other rows without
+changing the program being played or stopping its held notes. P9 data is
+prepared when the IMG opens, so MIDI and computer-key notes can play the chosen
+program immediately. The strip names the target and includes how many Soft-layer
+keygroups are playable on the chosen channel. Changing the audition channel does
+not repeatedly export the program.
+
+Opening the P9 editor temporarily makes that editor's program the audition
+target. Closing the editor returns audition to the program chosen in the main
+dropdown.
+
+Held notes appear in the strip with **MIDI** or **KEYBOARD**, the physical key
+where applicable, note, MIDI number, physical input channel, routed P9 channel
+and velocity. **NO KG MATCH** means the audition P9 has no keygroup for that
+note/channel. **NO PLAYABLE SOFT S9** means the keygroup exists but its Soft
+sample is blank, missing or unavailable. Matching keygroups highlight in the
+editor, and the latest triggered Soft-layer S9 gains a yellow spot in the main
+table. The spot jumps to the newly mapped S9 as soon as each MIDI or Mac-keyboard
+Note On is received. The latest note and S9 spot then remain visible for three seconds;
+playing another note immediately starts a new indication. In non-Omni mode, the
+physical controller channel is shown but does not prevent audition: the note is
+routed to the chosen P9 keygroup channel. The two input sources remain separately
+visible and release independently even when they play the same MIDI note.
+
+This selector is deliberately an EDIT950 audition channel, not PLAY950's Basic
+MIDI Channel control. PLAY950 still applies its Basic Channel plus P9 offset when
+used in a DAW; EDIT950 selects the P9 channel directly so channel programming can
+be checked without first reconfiguring the controller.
+
+P9 audition uses up to eight voices and the program's Soft-layer tuning,
+Constant Pitch, one-shot/loop direction, amplitude envelope and filter settings.
+The Loud layer and MIDI controllers are not auditioned. **MIDI AUDITION** is
+input-only: EDIT950 never sends MIDI or changes the source program.
 
 Display zoom applies to the P9 editor as well as the main browser. Keygroup rows
 show their musical and MIDI ranges and can be dragged to reorder complete
@@ -225,6 +280,14 @@ Use **Settings → Shared Tag Index** to reveal, move or export a copy of the ta
 library. A synced folder is fine, but avoid changing tags on two Macs at the
 same time.
 
+## Choose which files Finder opens in EDIT950
+
+Open **Settings → General → Finder File Associations** to make EDIT950 the
+default application for IMG, P9 or S9 files, individually or together. EDIT950
+warns before requesting this system-wide change. An IMG opens in the browser, a
+P9 opens in the standalone program editor, and an S9 is offered for import into
+the currently open writable IMG; the loose source file is never modified.
+
 ## Set the appearance and read diagnostics
 
 Choose **System**, **Light** or **Dark** in Settings or the View menu. The choice
@@ -232,10 +295,10 @@ is shared across 950TOOLS applications that support it. Display zoom remains a
 separate per-application setting.
 
 EDIT950 keeps a rolling, size-limited diagnostic activity log. It records
-application actions, helper commands and errors, but not IMG, P9, S9 or audio
-contents. Home and temporary paths are shortened. Open the viewer from the
-window or Settings, then use **Copy**, **Save**, **Reveal** or **Clear** when a
-problem needs a readable report.
+application actions, helper commands, program-audition input/engine recovery
+and errors, but not IMG, P9, S9 or audio contents. Home and temporary paths are
+shortened. Open the viewer from the window or Settings, then use **Copy**,
+**Save**, **Reveal** or **Clear** when a problem needs a readable report.
 
 ![The EDIT950 diagnostic activity log](Images/edit950-diagnostic-log.png)
 
@@ -272,6 +335,14 @@ removed in that case. Idle cached FIND950 browsing does not block eject.
 
 Keep the rescued original separately. A working copy is for music-making; the
 archive copy is for the future.
+
+## Read the manual and check for updates
+
+The recent-images screen links directly to this GitHub User Manual. Choose
+**EDIT950 → Check for Updates…** at any time for an explicit result. EDIT950
+also checks the latest GitHub release once when it launches. If a newer release
+exists, a dismissible notice opens its GitHub release page so you can download
+it yourself. EDIT950 never replaces or installs the application automatically.
 
 ## Quick fixes
 

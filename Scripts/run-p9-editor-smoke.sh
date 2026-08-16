@@ -23,16 +23,22 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/Models.swift \
   Sources/EDIT950/SuiteDesignSystem.swift \
   Sources/EDIT950/AkaiCommandBuilder.swift \
+  Sources/EDIT950/FileOperations.swift \
   Sources/EDIT950/P9Program.swift \
   Sources/EDIT950/AbletonDrumRackImport.swift \
   Sources/EDIT950/AbletonDrumRackExport.swift \
   Sources/EDIT950/AbletonDrumRackImportView.swift \
   Sources/EDIT950/MIDIKeygroupMonitor.swift \
+  Sources/EDIT950/ProgramAudition.swift \
+  Sources/EDIT950/ProgramAuditionViews.swift \
+  Sources/EDIT950/DiagnosticLogStore.swift \
   Sources/EDIT950/P9EditorView.swift \
   Tests/P9EditorVisualRunner.swift \
   -o "$BUILD_DIR/P9EditorVisualRunner" \
   -framework AppKit \
   -framework SwiftUI \
+  -framework AVFoundation \
+  -framework CoreMIDI \
   -framework CoreText \
   -framework UniformTypeIdentifiers
 

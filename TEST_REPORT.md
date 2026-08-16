@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.37 (build 55)**
+Current source: **1.8.44 (build 65)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -19,11 +19,17 @@ The suite covers IMG directory presentation, native P9/S9 handling, WAV
 conversion, tags, selection, drag and drop, read-only controls, Ableton
 import/export mapping, inter-application requests, removable-media cleanup and
 write-verification logic. It includes Save As New selection, temporarily
-inverted MIDI key ranges, MIDI running status, channel filtering, note priority
-and panic handling, byte-preserving keygroup reordering and bounded on-screen
-diagnostic rendering. It also verifies that bandwidth conversion scales loop
-endpoints to the converted WAV's measured frame count. The current accepted run
-completed with **80 passed and 0 failed**.
+inverted MIDI key ranges, MIDI running status and parser behaviour, direct P9
+keygroup-channel routing, repeated and channel-isolated notes, source-isolated computer
+keys, eight-voice stealing, Soft-layer tuning, Constant Pitch, looping,
+amplitude/filter envelopes, velocity and keyboard tracking, program teardown,
+audio-engine self-recovery on Note On and Panic, byte-preserving keygroup
+reordering and bounded on-screen diagnostic rendering.
+It also verifies that bandwidth conversion scales loop endpoints to the
+converted WAV's measured frame count, keeps current audition playback alive
+until the new preview is ready, and exposes the Finder association controls for
+IMG, P9 and S9. The current accepted run completed with **89 passed and 0
+failed**.
 
 The following broader checks are also available:
 
@@ -39,10 +45,25 @@ The following broader checks are also available:
 - The integration check creates a disposable IMG, imports native content,
   exports it again and confirms that the source material remains unchanged.
 - The interaction check renders the main application flows and exercises
-  selection, editing, rename, import/export and read-only behaviour.
+  selection, editing, rename, import/export and read-only behaviour. It also
+  verifies independent external-MIDI/computer-key feedback, three-second trigger
+  retention, immediate latest-Note-On movement of the S9 indicator, dropdown-P9
+  preparation and routing of both input types to the chosen P9 keygroup channel.
+  It requires a P9 from a freshly loaded IMG to be ready immediately, before any
+  polling or preparation delay, and sends a real key event through the main
+  application window. While that note is held it selects another table row and
+  verifies that the dropdown target, voice and feedback remain active.
+  The current pass also verifies the open-IMG name, path, access mode and
+  total/P9/S9 counts, and proves that a 44.1 kHz S9 renders non-silent audio
+  through the current 48 kHz output format. It inspects the actual main-table
+  audition cell and requires a rendered yellow triggered-S9 spot. It also
+  confirms that the recent-IMG home screen no longer exposes companion-app
+  handoff actions.
 - The visual checks render the browser, including its persistent IMG-capacity
-  header meter, plus the sample editor, zoomed program editor and settings views
-  for manual inspection in light and dark appearances.
+  header meter and enlarged fixed-region type, plus the sample editor, zoomed
+  program editor, settings views and the loaded-IMG inspector for manual
+  inspection in light and dark appearances. The inspector check includes the
+  **OPEN IN FIND** and **SEND TO PLAY** controls.
 - The release build verifies the application metadata, Universal
   `arm64`/`x86_64` architectures and deep ad-hoc signature.
 

@@ -103,6 +103,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var operationActive = false
     @Published private(set) var keygroupTransfer: P9KeygroupTransfer?
     @Published private(set) var auditioningSampleID: AkaiFile.ID?
+    @Published private(set) var programAuditionIndicatedSampleIDs = Set<AkaiFile.ID>()
+    @Published private(set) var mainProgramAuditionFileID: AkaiFile.ID?
     @Published private(set) var cachedSampleKeys = Set<String>()
     @Published private(set) var loadingSampleCacheKeys = Set<String>()
     @Published private(set) var sampleCacheErrors: [String: String] = [:]
@@ -120,6 +122,7 @@ final class AppModel: ObservableObject {
 
     let diagnostics = DiagnosticLogStore(appName: "EDIT950")
     let settings: AppSettings
+    let programAudition = ProgramAuditionController()
     private let controller = AkaiCommandController()
     private let volumeCoordination = VolumeCoordinationCenter(appName: "EDIT950")
     private var imageVolumeUseLease: VolumeUseLease?
@@ -130,7 +133,11 @@ final class AppModel: ObservableObject {
     private let sampleAudition = SampleLoopAuditionController()
     private var sampleCacheWorkspace: TemporaryWorkspace?
     private var sampleCacheURLs: [String: URL] = [:]
+    private var programAuditionSamplesByKey: [String: ProgramAuditionSample] = [:]
+    private var programAuditionProgramDataByID: [AkaiFile.ID: Data] = [:]
     private var sampleRatesByKey: [String: Int] = [:]
+    private var programAuditionTargetTask: Task<Void, Never>?
+    private var programAuditionTargetGeneration: UInt64 = 0
     private var handledFocusedRequestPaths = Set<String>()
     private var focusedDestinationAssessmentTask: Task<Void, Never>?
     private var tagLibrary: SharedTagLibrary
@@ -173,6 +180,20 @@ final class AppModel: ObservableObject {
         }
         sampleAudition.onPlaybackEnded = { [weak self] in
             self?.finishSampleAudition()
+        }
+        programAudition.onSampleIndicatorsChanged = { [weak self] sampleIDs in
+            self?.programAuditionIndicatedSampleIDs = sampleIDs
+        }
+        programAudition.onInputAvailabilityChanged = { [weak self] in
+            self?.refreshMainProgramAuditionTarget()
+        }
+        programAudition.onDiagnosticEvent = { [weak self] event in
+            self?.diagnostics.record(
+                event.level,
+                category: "program-audition",
+                message: event.message,
+                fields: event.fields
+            )
         }
         tagChangeObserver = DistributedNotificationCenter.default().addObserver(
             forName: SharedTagLibrary.distributedChangeNotification,
@@ -217,6 +238,57 @@ final class AppModel: ObservableObject {
         }.sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
+    }
+    var availableProgramAuditionFiles: [AkaiFile] {
+        snapshot.files.filter {
+            $0.name.pathExtensionUppercased == "P9"
+        }
+    }
+    var programAuditionIndicatedSampleNames: [String] {
+        snapshot.files.compactMap { file in
+            programAuditionIndicatedSampleIDs.contains(file.id) ? file.name : nil
+        }
+    }
+    var programAuditionSamples: [String: ProgramAuditionSample] {
+        programAuditionSamplesByKey
+    }
+
+    func selectMainProgramForAudition(_ fileID: AkaiFile.ID?) {
+        let nextID = fileID.flatMap { candidate in
+            availableProgramAuditionFiles.contains(where: { $0.id == candidate })
+                ? candidate : nil
+        }
+        guard mainProgramAuditionFileID != nextID else { return }
+        programAudition.panic()
+        mainProgramAuditionFileID = nextID
+        diagnostics.record(
+            .info,
+            category: "program-audition",
+            message: "Main audition program changed",
+            fields: [
+                "program": availableProgramAuditionFiles.first(where: {
+                    $0.id == nextID
+                })?.name ?? "none"
+            ]
+        )
+        refreshMainProgramAuditionTarget()
+    }
+    var p9FileCount: Int {
+        snapshot.files.count { $0.name.pathExtensionUppercased == "P9" }
+    }
+    var s9FileCount: Int {
+        snapshot.files.count { $0.name.pathExtensionUppercased == "S9" }
+    }
+    var imgHeaderSummary: IMGHeaderSummary? {
+        guard let session else { return nil }
+        return IMGHeaderSummary(
+            name: session.imageURL.lastPathComponent,
+            path: session.imageURL.path,
+            readOnly: session.readOnly,
+            totalFileCount: snapshot.fileCount,
+            p9FileCount: p9FileCount,
+            s9FileCount: s9FileCount
+        )
     }
     var canExport: Bool {
         selectedFiles.contains {
@@ -792,6 +864,7 @@ final class AppModel: ObservableObject {
                         request.program.volumePath
                     )
                 }
+                mainProgramAuditionFileID = nil
                 discardSampleAuditionCache()
                 _ = try await run(
                     try AkaiCommandBuilder.changeDirectory(
@@ -1013,6 +1086,7 @@ final class AppModel: ObservableObject {
         session = nil
         snapshot = DiskSnapshot()
         selection.removeAll()
+        mainProgramAuditionFileID = nil
         discardSampleAuditionCache()
         progress = OperationProgress(
             kind: .exporting,
@@ -1139,6 +1213,7 @@ final class AppModel: ObservableObject {
         session = nil
         snapshot = DiskSnapshot()
         selection.removeAll()
+        mainProgramAuditionFileID = nil
         discardSampleAuditionCache()
         progress = OperationProgress(
             kind: .exporting,
@@ -2677,6 +2752,7 @@ final class AppModel: ObservableObject {
         headerNotice = nil
         fileInformation = nil
         discardExternalSampleEditSession()
+        mainProgramAuditionFileID = nil
         discardSampleAuditionCache()
         await controller.close()
         session = nil
@@ -2730,6 +2806,7 @@ final class AppModel: ObservableObject {
         start {
             self.discardExternalSampleEditSession()
             self.stopSampleAudition()
+            self.mainProgramAuditionFileID = nil
             self.discardSampleAuditionCache()
             await self.controller.close()
             self.session = nil
@@ -2772,10 +2849,15 @@ final class AppModel: ObservableObject {
 
     func shutdown() async {
         currentOperationTask?.cancel()
+        programAuditionTargetGeneration &+= 1
+        programAuditionTargetTask?.cancel()
+        programAuditionTargetTask = nil
+        programAudition.clearPrograms()
         focusedDestinationAssessmentTask?.cancel()
         focusedDestinationAssessmentTask = nil
         discardExternalSampleEditSession()
         stopSampleAudition()
+        mainProgramAuditionFileID = nil
         discardSampleAuditionCache()
         await controller.close()
         session = nil
@@ -2796,9 +2878,15 @@ final class AppModel: ObservableObject {
 
     private func discardSampleAuditionCache() {
         stopSampleAudition()
+        programAuditionTargetGeneration &+= 1
+        programAuditionTargetTask?.cancel()
+        programAuditionTargetTask = nil
+        programAudition.setMainProgram(nil)
         sampleCacheWorkspace?.remove()
         sampleCacheWorkspace = nil
         sampleCacheURLs.removeAll()
+        programAuditionSamplesByKey.removeAll()
+        programAuditionProgramDataByID.removeAll()
         sampleRatesByKey.removeAll()
         cachedSampleKeys.removeAll()
         loadingSampleCacheKeys.removeAll()
@@ -2809,8 +2897,73 @@ final class AppModel: ObservableObject {
         start { try await self.refresh() }
     }
 
+    func refreshMainProgramAuditionTarget() {
+        programAuditionTargetGeneration &+= 1
+        let generation = programAuditionTargetGeneration
+        let previousTask = programAuditionTargetTask
+        let file = programAudition.inputEnabled
+            && session != nil
+            && isS900Volume
+            ? availableProgramAuditionFiles.first(where: {
+                $0.id == mainProgramAuditionFileID
+            }) : nil
+        let expectedProgramID = mainProgramAuditionFileID
+        let samples = programAuditionSamplesByKey
+        guard let file else {
+            programAudition.setMainProgram(nil)
+            return
+        }
+
+        if let data = programAuditionProgramDataByID[file.id] {
+            do {
+                let program = try P9Program(data: data)
+                let prepared = PreparedProgramAudition(
+                    program: program,
+                    availableSamples: samples
+                )
+                programAudition.setMainProgram(prepared)
+                return
+            } catch {
+                programAuditionProgramDataByID.removeValue(forKey: file.id)
+            }
+        }
+
+        programAudition.beginMainProgramPreparation(named: file.name)
+        programAuditionTargetTask = Task { [weak self] in
+            guard let self else { return }
+            if let previousTask { await previousTask.value }
+            guard !Task.isCancelled,
+                  generation == self.programAuditionTargetGeneration
+            else { return }
+            guard !self.operationActive else { return }
+            do {
+                let data = try await self.exportNativeFileData(file)
+                try Task.checkCancellation()
+                let program = try P9Program(data: data)
+                let prepared = PreparedProgramAudition(
+                    program: program,
+                    availableSamples: samples
+                )
+                guard generation == self.programAuditionTargetGeneration,
+                      expectedProgramID == self.mainProgramAuditionFileID
+                else { return }
+                self.programAuditionProgramDataByID[file.id] = data
+                self.programAudition.setMainProgram(prepared)
+            } catch is CancellationError {
+                return
+            } catch {
+                guard generation == self.programAuditionTargetGeneration else { return }
+                self.programAudition.setMainProgramPreparationError(
+                    "Could not prepare \(file.name) for audition: \(error.localizedDescription)",
+                    targetName: file.name
+                )
+            }
+        }
+    }
+
     func refresh() async throws {
         guard session != nil else { throw AppError.noImageOpen }
+        programAuditionProgramDataByID.removeAll()
         let existing = progress
         if progress == nil {
             progress = OperationProgress(kind: .refreshing, current: 0, total: 4, detail: "Reading disk layout")
@@ -2842,12 +2995,20 @@ final class AppModel: ObservableObject {
         next.rawDirectory = directory.cleanedOutput
         snapshot = next
         selection = selection.intersection(Set(next.files.map(\.id)))
+        if let fileID = mainProgramAuditionFileID,
+           !next.files.contains(where: {
+               $0.id == fileID && $0.name.pathExtensionUppercased == "P9"
+           }) {
+            mainProgramAuditionFileID = nil
+            programAudition.panic()
+        }
         updateProgress(4, detail: "Ready")
         if existing == nil { progress = nil }
     }
 
     func navigate(to volume: AkaiVolume) {
         start {
+            self.mainProgramAuditionFileID = nil
             self.discardSampleAuditionCache()
             _ = try await self.run(try AkaiCommandBuilder.changeDirectory(volume.path))
             try await self.refresh()
@@ -3186,9 +3347,27 @@ final class AppModel: ObservableObject {
         guard let wavURL = sampleCacheURLs[key],
               FileManager.default.fileExists(atPath: wavURL.path)
         else { return }
+        diagnostics.record(
+            .debug,
+            category: "sample-audition",
+            message: "Table audition requested",
+            fields: [
+                "sample": sample.name,
+                "sampleRate": String(sampleRatesByKey[key] ?? 0)
+            ]
+        )
         auditioningSampleID = sample.id
         sampleAudition.playOneShot(url: wavURL)
         if !sampleAudition.isPlaying {
+            diagnostics.record(
+                .error,
+                category: "sample-audition",
+                message: "Table audition could not start",
+                fields: [
+                    "sample": sample.name,
+                    "error": sampleAudition.errorMessage ?? "unknown error"
+                ]
+            )
             finishSampleAudition()
         }
     }
@@ -3199,6 +3378,15 @@ final class AppModel: ObservableObject {
     }
 
     private func finishSampleAudition() {
+        if let auditioningSampleID,
+           let sample = snapshot.files.first(where: { $0.id == auditioningSampleID }) {
+            diagnostics.record(
+                .debug,
+                category: "sample-audition",
+                message: "Table audition ended",
+                fields: ["sample": sample.name]
+            )
+        }
         auditioningSampleID = nil
     }
 
@@ -3214,6 +3402,7 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: cachedURL)
         }
         sampleRatesByKey.removeValue(forKey: key)
+        programAuditionSamplesByKey.removeValue(forKey: key)
         cachedSampleKeys.remove(key)
         loadingSampleCacheKeys.remove(key)
         sampleCacheErrors.removeValue(forKey: key)
@@ -3222,16 +3411,20 @@ final class AppModel: ObservableObject {
     private func rebuildSampleAuditionCache() async throws {
         discardSampleAuditionCache()
         let samples = snapshot.files.filter(\.isSample)
+        let programs = snapshot.files.filter {
+            $0.name.pathExtensionUppercased == "P9"
+        }
         guard isS900Volume else { return }
         let workspace = try TemporaryWorkspace(prefix: "akai-s9-audition-cache")
         sampleCacheWorkspace = workspace
-        guard !samples.isEmpty else { return }
+        let total = samples.count + programs.count
+        guard total > 0 else { return }
         loadingSampleCacheKeys = Set(samples.map { sampleCacheKey(for: $0) })
         progress = OperationProgress(
             kind: .exporting,
             current: 0,
-            total: samples.count,
-            detail: "Preparing sample audition cache"
+            total: total,
+            detail: "Preparing audition cache"
         )
         for (offset, sample) in samples.enumerated() {
             do {
@@ -3245,7 +3438,28 @@ final class AppModel: ObservableObject {
             }
             updateProgress(offset + 1, detail: "Caching \(sample.name)")
         }
+        for (offset, program) in programs.enumerated() {
+            do {
+                programAuditionProgramDataByID[program.id] =
+                    try await exportNativeFileData(program)
+            } catch {
+                diagnostics.record(
+                    .warning,
+                    category: "program-audition",
+                    message: "Could not cache program for table audition",
+                    fields: [
+                        "program": program.name,
+                        "error": error.localizedDescription,
+                    ]
+                )
+            }
+            updateProgress(
+                samples.count + offset + 1,
+                detail: "Caching \(program.name)"
+            )
+        }
         progress = nil
+        refreshMainProgramAuditionTarget()
     }
 
     private func cacheSampleForAudition(_ file: AkaiFile) async throws {
@@ -3261,6 +3475,44 @@ final class AppModel: ObservableObject {
             try? FileManager.default.removeItem(at: existing)
         }
         cachedSampleKeys.remove(key)
+        let existingNativeFiles = try FileManager.default.contentsOfDirectory(
+            at: workspace.url,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        for candidate in existingNativeFiles
+            where candidate.pathExtension.caseInsensitiveCompare("s9") == .orderedSame
+                && Self.normalizedSampleKey(Self.sampleBaseName(candidate.lastPathComponent)) == key {
+            try? FileManager.default.removeItem(at: candidate)
+        }
+        let nativeBefore = Set(
+            try FileManager.default.contentsOfDirectory(
+                at: workspace.url,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ).map(\.standardizedFileURL)
+        )
+        _ = try await run(try AkaiCommandBuilder.localDirectory(workspace.url.path))
+        _ = try await run(try AkaiCommandBuilder.exportNative(index: file.index))
+        let nativeAfter = try FileManager.default.contentsOfDirectory(
+            at: workspace.url,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )
+        guard let exportedNative = nativeAfter.first(where: {
+            !nativeBefore.contains($0.standardizedFileURL)
+                && $0.pathExtension.caseInsensitiveCompare("s9") == .orderedSame
+        }) else {
+            throw AppError.verificationFailed(
+                "AKAI Util did not create a native S9 cache entry for \(file.name)."
+            )
+        }
+        let normalizedNative = try NativeAkaiFileExport.normalizeExportedFile(
+            exportedNative,
+            expectedFilename: file.name
+        )
+        let nativeData = try Data(contentsOf: normalizedNative)
+
         let before = Set(
             try FileManager.default.contentsOfDirectory(
                 at: workspace.url,
@@ -3292,6 +3544,12 @@ final class AppModel: ObservableObject {
             snapshot.files[index] = snapshot.files[index].withSampleRate(sampleRate)
         }
         sampleCacheURLs[key] = wavURL
+        programAuditionSamplesByKey[key] = try ProgramAuditionSample.load(
+            fileID: file.id,
+            normalizedName: key,
+            wavURL: wavURL,
+            nativeData: nativeData
+        )
         cachedSampleKeys.insert(key)
         loadingSampleCacheKeys.remove(key)
     }
@@ -6585,6 +6843,7 @@ final class AppModel: ObservableObject {
             }
             currentOperationTask = nil
             operationActive = false
+            refreshMainProgramAuditionTarget()
         }
     }
 

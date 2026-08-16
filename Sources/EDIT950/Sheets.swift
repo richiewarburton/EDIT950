@@ -1,5 +1,5 @@
 import AppKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -18,6 +18,10 @@ final class SampleLoopAuditionController: ObservableObject {
     private var activeSemitoneOffset = 0
     private var playbackGeneration = UUID()
     var onPlaybackEnded: (() -> Void)?
+#if AKAI_TESTING
+    var onRenderedAudioForTesting: (() -> Void)?
+    private var testTapInstalled = false
+#endif
 
     func toggle(url: URL, start: Int, end: Int) {
         toggle(
@@ -141,23 +145,24 @@ final class SampleLoopAuditionController: ObservableObject {
                 start: AVAudioFramePosition(regionStart),
                 frameCount: AVAudioFrameCount(regionEnd - regionStart)
             )
-            let playable: AVAudioPCMBuffer
+            let directedBuffer: AVAudioPCMBuffer
             switch (mode, direction) {
             case (.alternatingLoop, .normal):
-                playable = try alternatingBuffer(
+                directedBuffer = try alternatingBuffer(
                     forward: forward,
                     startsReversed: false
                 )
             case (.alternatingLoop, .reverse):
-                playable = try alternatingBuffer(
+                directedBuffer = try alternatingBuffer(
                     forward: forward,
                     startsReversed: true
                 )
             case (_, .reverse):
-                playable = try reversedBuffer(forward)
+                directedBuffer = try reversedBuffer(forward)
             default:
-                playable = forward
+                directedBuffer = forward
             }
+            let playable = try convertedToCurrentOutputRate(directedBuffer)
 
             try preparePlayback(
                 format: playable.format,
@@ -222,8 +227,82 @@ final class SampleLoopAuditionController: ObservableObject {
         varispeed.rate = Float(pow(2.0, Double(semitoneOffset) / 12.0))
         engine.connect(player, to: varispeed, format: format)
         engine.connect(varispeed, to: engine.mainMixerNode, format: format)
+#if AKAI_TESTING
+        if testTapInstalled {
+            engine.mainMixerNode.removeTap(onBus: 0)
+        }
+        testTapInstalled = true
+        engine.mainMixerNode.installTap(
+            onBus: 0,
+            bufferSize: 256,
+            format: nil
+        ) { [weak self] buffer, _ in
+            guard let channels = buffer.floatChannelData else { return }
+            let frameCount = Int(buffer.frameLength)
+            let channelCount = Int(buffer.format.channelCount)
+            guard (0..<channelCount).contains(where: { channel in
+                (0..<frameCount).contains { abs(channels[channel][$0]) > 0.000_01 }
+            }) else { return }
+            Task { @MainActor [weak self] in
+                self?.onRenderedAudioForTesting?()
+            }
+        }
+#endif
         engine.prepare()
         try engine.start()
+    }
+
+    private func convertedToCurrentOutputRate(
+        _ source: AVAudioPCMBuffer
+    ) throws -> AVAudioPCMBuffer {
+        let outputRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        guard outputRate > 0,
+              abs(source.format.sampleRate - outputRate) >= 0.5
+        else { return source }
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: outputRate,
+            channels: source.format.channelCount,
+            interleaved: false
+        ), let converter = AVAudioConverter(from: source.format, to: format) else {
+            throw AppError.verificationFailed(
+                "The audition audio could not be adapted to the current output sample rate."
+            )
+        }
+        converter.sampleRateConverterQuality = .max
+        let capacity = AVAudioFrameCount(
+            ceil(
+                Double(source.frameLength) * outputRate
+                    / source.format.sampleRate
+            )
+        ) + 64
+        guard let converted = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: capacity
+        ) else {
+            throw AppError.verificationFailed(
+                "The converted audition buffer could not be created."
+            )
+        }
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: converted, error: &conversionError) {
+            _, inputStatus in
+            guard !suppliedInput else {
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return source
+        }
+        if let conversionError { throw conversionError }
+        guard status != .error, converted.frameLength > 0 else {
+            throw AppError.verificationFailed(
+                "The audition audio could not be converted to \(Int(outputRate)) Hz."
+            )
+        }
+        return converted
     }
 
     private func finishPlayback() {

@@ -30,33 +30,14 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.37 (build 55)**. Requires macOS 14 or later.
+Current source version: **1.8.44 (build 65)**. Requires macOS 14 or later.
 
-### What is new in 1.8.37
+### What is new in 1.8.44
 
-- a welcoming, zoom-aware launch screen lists recent IMGs and provides verified
-  **Load**, **Create Copy and Load**, **Open in FIND**, **Send to PLAY** and
-  **Create New** actions, plus 200 rotating workflow hints;
-- the S9 editor provides a collapsible two-octave pitch keyboard, sampler-style
-  varispeed audition, Space-bar triggering and optional input-only MIDI audition
-  with channel selection and a Panic control;
-- **Save As New** creates and verifies a distinct S9 while confirming that the
-  original sample and its P9 references remain unchanged;
-- the P9 editor follows Display zoom and supports complete keygroup reordering;
-- the main IMG header keeps used space, free space and percentage visible on a
-  persistent capacity meter;
-- System, Light and Dark appearances can be selected from Settings or the View
-  menu;
-- loop-point arrows have forgiving full-button hit areas, the editor's segmented
-  controls share one clear visual style, bandwidth conversion scales loop
-  endpoints to the converted WAV and long guidance text wraps correctly;
-- persistent, size-limited diagnostic logs are visible in both the window and
-  Settings, with copy, save, reveal and clear controls; and
-- EDIT950 and FIND950 now coordinate removable-volume use so Safe Eject stops
-  before metadata cleanup whenever the companion app is actively using the same
-  volume.
+- **OPEN IN FIND** and **SEND TO PLAY** now live with the loaded IMG's actions
+  in the inspector sidebar instead of on the recent-images home screen.
 
-See [the complete 1.8.37 release notes](ReleaseDocs/RELEASE_NOTES_1.8.37.md)
+See [the complete 1.8.44 release notes](ReleaseDocs/RELEASE_NOTES_1.8.44.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
@@ -169,9 +150,17 @@ and optional input-only MIDI triggering.*
 - Copy keygroups and their linked samples between writable IMG files.
 - Import suitable Ableton Drum Rack pads into S9/P9 content.
 - Export a P9 and its Soft samples as a Live 12.4.3 Sampler Drum Rack.
+- Choose a main-screen P9 from the dedicated audition dropdown, then play it
+  from external MIDI or the Ableton-style computer keyboard. The Program editor
+  auditions its open program. Sounding Soft S9 rows are
+  marked in the main table while notes are held or releasing.
 
-A read-only MIDI monitor can highlight the keygroups played from a connected
-controller. It sends no MIDI and produces no audio.
+The shared audition strip shows every pressed MIDI or computer key, its source,
+note, input channel, routed P9 keygroup channel and velocity. Choosing **KG CH
+1–16** routes both input types directly to that P9 channel, so a controller does
+not have to be reconfigured merely to check channel programming. It highlights
+matching keygroups and plays the Soft sample layer; it never sends MIDI or
+selects the Loud layer.
 
 ![EDIT950 P9 keygroup editor](Documentation/Images/edit950-p9-editor.png)
 

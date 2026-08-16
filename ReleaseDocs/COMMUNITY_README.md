@@ -1,4 +1,4 @@
-# EDIT950 1.8.37
+# EDIT950 1.8.44
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -10,7 +10,54 @@ release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
 
-Version 1.8.37 build 55 adds a recent-IMG launch dashboard with verified working
+Version 1.8.44 build 65 moves **OPEN IN FIND** and **SEND TO PLAY** off the
+recent-images home screen and into the loaded IMG's inspector Actions section.
+The handoff target is therefore always the IMG currently open in EDIT950.
+
+Version 1.8.43 build 64 reorganizes the main audition strip into clear Input,
+Audition Routing, Computer Keys and Activity groups with consistently styled
+P9 and keygroup-channel menus. The launch screen now links directly to the
+GitHub User Manual instead of rotating hints. EDIT950 also checks GitHub once
+per launch and shows a non-modal release-page link only when a newer version is
+available; it never installs an update automatically.
+
+Version 1.8.42 build 63 adds an explicit **AUDITION PROGRAM** dropdown to the
+main screen. Its P9 choice is independent of file-table selection, so browsing,
+sorting, editing and exporting other rows neither changes the audition target
+nor stops held notes. The Program editor temporarily takes over audition while
+open and returns to the dropdown program when closed.
+
+Version 1.8.41 build 62 prepares P9 data alongside the S9 audition cache when
+an IMG opens. A newly selected main-table program is therefore ready for MIDI
+and computer-keyboard audition immediately, with no notes silently lost to a
+later P9 export. The Program editor and main-table yellow S9 indicator continue
+to use the same shared audition engine.
+
+Version 1.8.40 build 61 fixes stale main-table audition cells. Every S9 play
+button now becomes active when its asynchronous cache is ready, including all
+samples tested in BEAT-DISK and HARDBREAK. The same live cell renders a visible
+yellow spot on the S9 most recently triggered from external MIDI or the computer
+keyboard.
+
+Version 1.8.39 build 60 adds confirmed Finder associations for IMG, P9 and S9
+files from Settings, an explicit Close IMG toolbar action, and a detailed IMG
+identity header with path, access mode and file-type counts. S9 audition now
+converts source audio to the active output-device sample rate, and bandwidth
+conversion no longer interrupts the sound already playing. P9 MIDI/computer-key
+audition self-recovers if its audio engine stops; Panic also restarts that
+engine, and recovery activity is recorded in the diagnostic log.
+
+Version 1.8.38 build 59 adds eight-voice P9 program audition from external MIDI
+or an Ableton-style Mac keyboard in both the main browser and program editor.
+The shared controls include Omni/direct P9 keygroup-channel routing and Panic;
+live feedback identifies the input source, physical key, note, input and routed
+channels and velocity for three seconds, while the main-table dot follows each
+newest triggered Soft-layer S9 in
+real time. Non-Omni input rejects channels outside the selected base/offset
+routing. Playback follows PLAY950's voice
+stealing, tuning, Constant Pitch, loop, amplitude-envelope and filter rules.
+
+Version 1.8.37 build 55 added a recent-IMG launch dashboard with verified working
 copy, FIND950 and PLAY950 actions, double-click loading and 200 rotating hints.
 The main browser keeps IMG capacity visible in its header. System, Light and Dark
 appearances are selectable, and Display zoom applies to the launch screen, main

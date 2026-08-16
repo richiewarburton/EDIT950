@@ -49,6 +49,8 @@ CLANG_MODULE_CACHE_PATH="$build_dir/ModuleCache" swiftc \
   Sources/EDIT950/WAVService.swift \
   Sources/EDIT950/AppSettings.swift \
   Sources/EDIT950/MIDIKeygroupMonitor.swift \
+  Sources/EDIT950/ProgramAudition.swift \
+  Sources/EDIT950/ProgramAuditionViews.swift \
   Sources/EDIT950/P9EditorView.swift \
   Sources/EDIT950/FocusedProgramExport.swift \
   Sources/EDIT950/CollectionExport.swift \

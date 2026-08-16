@@ -72,6 +72,7 @@ struct P9EditorVisualRunner {
                 root = AnyView(
                     P9EditorSheet(
                         document: document,
+                        audition: ProgramAuditionController(),
                         initialSelection: Set(document.program.keygroups.indices),
                         showSpreadInitially: true
                     )
@@ -88,6 +89,7 @@ struct P9EditorVisualRunner {
                 root = AnyView(
                     P9EditorSheet(
                         document: document,
+                        audition: ProgramAuditionController(),
                         initialSelection: initialSelection,
                         showOverwriteConfirmationInitially: mode == "--overwrite",
                         onOverwriteP9:
