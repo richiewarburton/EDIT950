@@ -366,19 +366,26 @@ struct ComputerMIDIKeyboardMonitor: NSViewRepresentable {
                     object: nil,
                     queue: .main
                 ) { [weak self] _ in
-                    Task { @MainActor in self?.controller.focusWasLost() }
+                    guard let coordinator = self else { return }
+                    Task { @MainActor [coordinator] in
+                        coordinator.controller.focusWasLost()
+                    }
                 },
                 NotificationCenter.default.addObserver(
                     forName: NSWindow.didResignKeyNotification,
                     object: nil,
                     queue: .main
                 ) { [weak self] notification in
-                    Task { @MainActor in
-                        guard let self,
+                    guard let coordinator = self else { return }
+                    Task { @MainActor [coordinator] in
+                        guard
                               let window = notification.object as? NSWindow,
-                              self.belongs(window, to: self.hostView?.window)
+                              coordinator.belongs(
+                                  window,
+                                  to: coordinator.hostView?.window
+                              )
                         else { return }
-                        self.controller.focusWasLost()
+                        coordinator.controller.focusWasLost()
                     }
                 }
             ]

@@ -1079,7 +1079,10 @@ final class ProgramAuditionController: ObservableObject {
             withTimeInterval: 1.0 / 30.0,
             repeats: true
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshActiveSamples() }
+            guard let controller = self else { return }
+            Task { @MainActor [controller] in
+                controller.refreshActiveSamples()
+            }
         }
     }
 
