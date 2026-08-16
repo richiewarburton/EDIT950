@@ -25,7 +25,7 @@ This is for people who:
 - have a folder copied from a Gotek or USB floppy emulator;
 - inherited an S900/S950 library but no longer own the sampler;
 - want the original programs and keygroups, not just disconnected WAV files; or
-- still use the hardware and need a safer way to prepare IMG files.
+- still use the hardware and want a safer and quicker way to work.
 
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
