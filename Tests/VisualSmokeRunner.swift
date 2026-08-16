@@ -50,6 +50,9 @@ struct VisualSmokeRunner {
            let zoom = SuiteZoomLevel(rawValue: rawZoom) {
             suitePreferences.zoom = zoom
         }
+        if ProcessInfo.processInfo.environment["EDIT950_SMOKE_INSPECTOR"] == "1" {
+            suitePreferences.inspectorVisible = true
+        }
 
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
@@ -131,8 +134,22 @@ struct VisualSmokeRunner {
                         )
                     }
                 }
-                if let firstFile = model.snapshot.files.first {
+                if ProcessInfo.processInfo.environment[
+                    "EDIT950_SMOKE_DISK_INSPECTOR"
+                ] != "1", let firstFile = model.snapshot.files.first {
                     model.selection = [firstFile.id]
+                }
+                if ProcessInfo.processInfo.environment[
+                    "EDIT950_SMOKE_DISK_INSPECTOR"
+                ] == "1" {
+                    let inspectorRoot = EditInspector()
+                        .environmentObject(model)
+                        .preferredColorScheme(suitePreferences.appearance.colorScheme)
+                        .frame(width: 520, height: 760)
+                    let inspectorHost = NSHostingView(rootView: inspectorRoot)
+                    window.setContentSize(CGSize(width: 520, height: 760))
+                    window.contentView = inspectorHost
+                    captureView = inspectorHost
                 }
                 if ProcessInfo.processInfo.environment[
                     "EDIT950_SHOW_DIAGNOSTIC_LOG"

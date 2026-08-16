@@ -12,6 +12,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   -sdk "$SDK_PATH" \
   -target arm64-apple-macosx14.0 \
   -swift-version 5 \
+  -D AKAI_TESTING \
   -parse-as-library \
   Sources/EDIT950/Models.swift \
   Sources/EDIT950/SharedTagLibrary.swift \
@@ -22,6 +23,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/FileOperations.swift \
   Sources/EDIT950/P9Program.swift \
   Sources/EDIT950/MIDIKeygroupMonitor.swift \
+  Sources/EDIT950/ProgramAudition.swift \
   Sources/EDIT950/PLAY950Fixture.swift \
   Sources/EDIT950/AbletonDrumRackImport.swift \
   Sources/EDIT950/AbletonDrumRackExport.swift \
@@ -29,6 +31,7 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/DiagnosticLogStore.swift \
   Sources/EDIT950/VolumeCoordination.swift \
   Sources/EDIT950/AppSettings.swift \
+  Tests/P9TestFixture.swift \
   Tests/TestRunner.swift \
   -o "$BUILD_DIR/EDIT950Tests" \
   -framework AppKit \
@@ -38,3 +41,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
 
 chmod +x Tests/Fixtures/fake-akaiutil.sh
 "$BUILD_DIR/EDIT950Tests"
+
+"$PROJECT_DIR/Scripts/run-p9-editor-smoke.sh" \
+  synthetic.p9 \
+  /tmp/EDIT950-P9-bulk-release-regression.png \
+  --bulk-release

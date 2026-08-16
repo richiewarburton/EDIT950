@@ -8,6 +8,7 @@ struct EDIT950App: App {
     @StateObject private var model: AppModel
     @StateObject private var suitePreferences: SuitePreferences
     @StateObject private var undoHistory: SuiteUndoCoordinator
+    @StateObject private var releaseChecker: GitHubReleaseChecker
     @State private var showAbout = false
 
     init() {
@@ -20,6 +21,15 @@ struct EDIT950App: App {
             defaultInspectorVisible: false
         ))
         _undoHistory = StateObject(wrappedValue: SuiteUndoCoordinator())
+        let version = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleShortVersionString"
+        ) as? String ?? "DEV"
+        _releaseChecker = StateObject(wrappedValue: GitHubReleaseChecker(
+            product: "EDIT950",
+            owner: "richiewarburton",
+            repository: "EDIT950",
+            currentVersion: version
+        ))
         SuiteFontGate.validateBundle()
     }
 
@@ -34,23 +44,33 @@ struct EDIT950App: App {
 
     var body: some Scene {
         Window("EDIT950", id: "main") {
-            MainView()
-                .environmentObject(model)
-                .environmentObject(settings)
-                .environmentObject(suitePreferences)
-                .preferredColorScheme(suitePreferences.appearance.colorScheme)
-                .onAppear { model.undoManager = undoHistory.manager }
-                .suiteSurface()
-                .frame(minWidth: 880, minHeight: 520)
-                .onOpenURL { model.handleOpenURLs([$0]) }
-                .onAppear { appDelegate.model = model }
-                .task { await settings.validateExecutable() }
-                .sheet(isPresented: $showAbout) {
-                    SuiteAboutView(
-                        product: "EDIT950",
-                        version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "DEV"
-                    )
-                }
+            VStack(spacing: 0) {
+                SuiteUpdateBanner(checker: releaseChecker)
+                MainView()
+                    .environmentObject(model)
+                    .environmentObject(settings)
+                    .environmentObject(suitePreferences)
+            }
+            .preferredColorScheme(suitePreferences.appearance.colorScheme)
+            .onAppear { model.undoManager = undoHistory.manager }
+            .suiteSurface()
+            .frame(minWidth: 880, minHeight: 520)
+            .onOpenURL { model.handleOpenURLs([$0]) }
+            .onAppear { appDelegate.model = model }
+            .task {
+                async let validateHelper: Void = settings.validateExecutable()
+                async let checkRelease: Void = releaseChecker.startAutomaticCheck()
+                _ = await (validateHelper, checkRelease)
+            }
+            .sheet(isPresented: $showAbout) {
+                SuiteAboutView(
+                    product: "EDIT950",
+                    version: releaseChecker.currentVersion
+                )
+            }
+            .sheet(isPresented: $releaseChecker.isPresentingResult) {
+                SuiteUpdateResultView(checker: releaseChecker)
+            }
         }
         .defaultSize(width: 1180, height: 760)
         .commands {
@@ -64,6 +84,10 @@ struct EDIT950App: App {
             }
             CommandGroup(replacing: .appInfo) {
                 Button("ABOUT EDIT950…") { showAbout = true }
+                Divider()
+                Button("CHECK FOR UPDATES…") {
+                    Task { await releaseChecker.checkForUpdates(presentResult: true) }
+                }
             }
             CommandGroup(replacing: .newItem) {
                 Button("Open Image…") { model.openPanel() }

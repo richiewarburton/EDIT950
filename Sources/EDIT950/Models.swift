@@ -135,6 +135,15 @@ struct ImageSession: Equatable {
     var isRemovable: Bool { removableVolumeURL != nil }
 }
 
+struct IMGHeaderSummary: Equatable {
+    let name: String
+    let path: String
+    let readOnly: Bool
+    let totalFileCount: Int
+    let p9FileCount: Int
+    let s9FileCount: Int
+}
+
 struct CommandResult: Equatable {
     let command: String
     let output: String

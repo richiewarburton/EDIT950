@@ -13,8 +13,10 @@ struct P9EditorVisualRunner {
         let screenshotURL = URL(fileURLWithPath: CommandLine.arguments[2])
 
         do {
-            let sourceData = try Data(contentsOf: programURL)
             let mode = CommandLine.arguments.count == 4 ? CommandLine.arguments[3] : ""
+            let sourceData = mode == "--bulk-release"
+                ? P9TestFixture.make(keygroupCount: 41)
+                : try Data(contentsOf: programURL)
             let document = try P9EditorDocument(
                 data: sourceData,
                 source: mode == "--overwrite" || mode == "--image"
@@ -28,7 +30,7 @@ struct P9EditorVisualRunner {
             guard try document.program.encoded() == sourceData, !document.hasChanges else {
                 throw P9EditorVisualFailure.roundTrip
             }
-            if (mode == "--overwrite" || mode == "--image"),
+            if mode == "--overwrite",
                !document.program.keygroups.isEmpty {
                 var program = document.program
                 program.keygroups[0].softLoudness += 1
@@ -72,6 +74,7 @@ struct P9EditorVisualRunner {
                 root = AnyView(
                     P9EditorSheet(
                         document: document,
+                        audition: ProgramAuditionController(),
                         initialSelection: Set(document.program.keygroups.indices),
                         showSpreadInitially: true
                     )
@@ -82,12 +85,13 @@ struct P9EditorVisualRunner {
                 contentSize = P9EditorSheet.presentationSize(
                     for: suitePreferences.zoom
                 )
-                let initialSelection = mode == "--all"
+                let initialSelection = mode == "--all" || mode == "--bulk-release"
                     ? Set(document.program.keygroups.indices)
                     : nil
                 root = AnyView(
                     P9EditorSheet(
                         document: document,
+                        audition: ProgramAuditionController(),
                         initialSelection: initialSelection,
                         showOverwriteConfirmationInitially: mode == "--overwrite",
                         onOverwriteP9:
@@ -124,6 +128,10 @@ struct P9EditorVisualRunner {
             ].flatMap(Double.init) ?? 0.5
             RunLoop.current.run(until: Date(timeIntervalSinceNow: holdSeconds))
             hostingView.layoutSubtreeIfNeeded()
+            if mode == "--bulk-release" {
+                try exerciseBulkReleaseEdit(in: window, document: document)
+                hostingView.layoutSubtreeIfNeeded()
+            }
             window.attachedSheet?.appearance = NSAppearance(named: appearanceName)
             window.attachedSheet?.contentView?.appearance = NSAppearance(named: appearanceName)
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.1))
@@ -151,10 +159,85 @@ struct P9EditorVisualRunner {
             exit(1)
         }
     }
+
+    private static func exerciseBulkReleaseEdit(
+        in window: NSWindow,
+        document: P9EditorDocument
+    ) throws {
+        guard let root = window.contentView else {
+            throw P9EditorVisualFailure.bulkReleaseControls
+        }
+
+        let valueField = root.descendant(
+                accessibilityIdentifier: "p9-bulk-amplitude-release-value"
+              ) as? NSTextField
+        let operation = root.descendant(
+            accessibilityIdentifier: "p9-bulk-amplitude-release-operation"
+        ) as? NSPopUpButton
+        guard let operation else {
+            throw P9EditorVisualFailure.bulkReleaseControls
+        }
+        guard operation.item(withTitle: "Set") != nil else {
+            throw P9EditorVisualFailure.bulkReleaseControls
+        }
+        operation.selectItem(withTitle: "Set")
+        operation.sendAction(operation.action, to: operation.target)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        guard valueField?.isEnabled == true else {
+            throw P9EditorVisualFailure.bulkReleaseApplyDisabled
+        }
+        guard let apply = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "\r",
+            charactersIgnoringModifiers: "\r",
+            isARepeat: false,
+            keyCode: 36
+        ) else {
+            throw P9EditorVisualFailure.bulkReleaseApplyDisabled
+        }
+        window.makeFirstResponder(nil)
+        window.sendEvent(apply)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        guard document.hasChanges,
+              document.program.keygroups.allSatisfy({ $0.envelope.release == 0 })
+        else {
+            throw P9EditorVisualFailure.bulkReleaseNotApplied
+        }
+        let reopened = try P9Program(data: document.program.encoded())
+        guard reopened.keygroups.allSatisfy({ $0.envelope.release == 0 }) else {
+            throw P9EditorVisualFailure.bulkReleaseNotEncoded
+        }
+    }
 }
 
 private enum P9EditorVisualFailure: Error {
     case capture
     case preferences
     case roundTrip
+    case bulkReleaseControls
+    case bulkReleaseApplyDisabled
+    case bulkReleaseNotApplied
+    case bulkReleaseNotEncoded
+}
+
+private extension NSView {
+    func descendant(accessibilityIdentifier: String) -> NSView? {
+        if self.accessibilityIdentifier() == accessibilityIdentifier {
+            return self
+        }
+        for subview in subviews {
+            if let match = subview.descendant(
+                accessibilityIdentifier: accessibilityIdentifier
+            ) {
+                return match
+            }
+        }
+        return nil
+    }
+
 }

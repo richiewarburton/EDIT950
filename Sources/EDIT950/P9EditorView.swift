@@ -296,8 +296,8 @@ final class P9EditorDocument: ObservableObject, Identifiable {
             )
         }
         let panel = NSSavePanel()
-        panel.title = "Save Edited P9 Copy"
-        panel.prompt = "Save Copy"
+        panel.title = "Save P9 As"
+        panel.prompt = "Save P9"
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.allowedContentTypes = [UTType(filenameExtension: "p9") ?? .data]
@@ -315,6 +315,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
     }
 }
 
+@MainActor
 struct P9EditorSheet: View {
     static let baseSize = CGSize(width: 1240, height: 800)
 
@@ -327,6 +328,8 @@ struct P9EditorSheet: View {
     }
 
     @ObservedObject var document: P9EditorDocument
+    @ObservedObject var audition: ProgramAuditionController
+    let auditionSamples: [String: ProgramAuditionSample]
     let keygroupTransfer: P9KeygroupTransfer?
     let onCopyKeygroups: ((P9Program, Set<Int>, P9EditorDocument.Source) -> Void)?
     let onPasteKeygroups: ((P9EditorDocument) -> Void)?
@@ -347,20 +350,21 @@ struct P9EditorSheet: View {
     @State private var loudSampleExpanded = false
     @State private var showSpreadSheet = false
     @State private var showOverwriteConfirmation = false
+    @State private var showSaveP9Destination = false
     @State private var showSaveAsNewInImagePrompt = false
     @State private var createBackupBeforeOverwrite = true
     @State private var showCloseConfirmation = false
     @State private var spreadSettings = P9SpreadSettings()
     @State private var message: String?
     @State private var errorMessage: String?
-    @State private var midiMonitoringEnabled = true
     @State private var keygroupSelectionAnchor: Int?
     @State private var draggedKeygroupOffsets = IndexSet()
     @State private var keygroupDropTarget: P9KeygroupDropTarget?
-    @StateObject private var midiMonitor = MIDIKeygroupMonitor()
 
     init(
         document: P9EditorDocument,
+        audition: ProgramAuditionController,
+        auditionSamples: [String: ProgramAuditionSample] = [:],
         initialSelection: Set<Int>? = nil,
         showSpreadInitially: Bool = false,
         showOverwriteConfirmationInitially: Bool = false,
@@ -376,6 +380,8 @@ struct P9EditorSheet: View {
             ((AbletonDrumRackImportDraft, P9EditorDocument) -> Void)? = nil
     ) {
         self.document = document
+        self.audition = audition
+        self.auditionSamples = auditionSamples
         self.keygroupTransfer = keygroupTransfer
         self.onCopyKeygroups = onCopyKeygroups
         self.onPasteKeygroups = onPasteKeygroups
@@ -418,6 +424,11 @@ struct P9EditorSheet: View {
                         || document.isImportingDrumRack
                 )
             Divider()
+            ProgramAuditionControlStrip(
+                controller: audition,
+                indicatedSampleNames: indicatedEditorSampleNames
+            )
+            Divider()
             HStack(spacing: 0) {
                 keygroupList
                     .frame(width: 240)
@@ -454,15 +465,18 @@ struct P9EditorSheet: View {
             bulkEdits = P9BulkEdits()
         }
         .onAppear {
-            if midiMonitoringEnabled { midiMonitor.start() }
+            audition.activateEditor(preparedAuditionProgram)
         }
-        .onDisappear { midiMonitor.stop() }
-        .onChange(of: midiMonitoringEnabled) { _, enabled in
-            if enabled {
-                midiMonitor.start()
-            } else {
-                midiMonitor.stop()
+        .onDisappear { audition.deactivateEditor() }
+        .onKeyPress("a", phases: .down) { press in
+            guard press.modifiers.contains(.command) else {
+                return .ignored
             }
+            selectAllKeygroups()
+            return .handled
+        }
+        .onChange(of: document.program) { _, _ in
+            audition.updateEditor(preparedAuditionProgram)
         }
         .alert("P9 Editor", isPresented: Binding(
             get: {
@@ -551,6 +565,24 @@ struct P9EditorSheet: View {
                 overwriteInImage(createBackup: createBackup)
             }
         }
+        .confirmationDialog(
+            "Save P9 As…",
+            isPresented: $showSaveP9Destination,
+            titleVisibility: .visible
+        ) {
+            Button("Save in Current IMG…") {
+                showSaveAsNewInImagePrompt = true
+            }
+            Button("Save to Filesystem…") {
+                saveCopy()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Choose whether to create a new P9 beside the current program "
+                    + "in the open IMG, or save a standalone P9 file."
+            )
+        }
         .sheet(isPresented: $showSaveAsNewInImagePrompt) {
             P9SaveAsNewInImageSheet(
                 sourceFilename: document.source.filename,
@@ -612,23 +644,22 @@ struct P9EditorSheet: View {
             Toggle("Positional crossfade", isOn: positionalCrossfadeBinding)
             Divider()
                 .frame(height: 20)
-            Toggle("MIDI monitor", isOn: $midiMonitoringEnabled)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(midiMonitor.lastEventDescription)
-                    .font(SuiteFont.regular(10)).monospacedDigit()
-                    .foregroundStyle(
-                        midiMonitor.activeNotes.isEmpty
-                            ? Color.suiteUnit : Color.suiteBlue
-                    )
-                if let error = midiMonitor.errorMessage {
-                    Text(error)
-                        .font(SuiteFont.regular(9))
-                        .foregroundStyle(Color.suiteRed)
-                }
-            }
-            .frame(minWidth: 190, alignment: .trailing)
         }
         .padding(12)
+    }
+
+    private var preparedAuditionProgram: PreparedProgramAudition {
+        PreparedProgramAudition(
+            program: document.program,
+            availableSamples: auditionSamples
+        )
+    }
+
+    private var indicatedEditorSampleNames: [String] {
+        auditionSamples.values.compactMap { sample in
+            audition.indicatedSampleIDs.contains(sample.fileID)
+                ? sample.normalizedName : nil
+        }.sorted()
     }
 
     private var keygroupList: some View {
@@ -651,10 +682,7 @@ struct P9EditorSheet: View {
                     HStack {
                         Circle()
                             .fill(
-                                MIDIKeygroupTriggerMatcher.matches(
-                                    keygroup,
-                                    activeNotes: midiMonitor.activeNotes
-                                )
+                                audition.isKeygroupHeld(keygroup)
                                     ? isSelected ? Color.suiteYellow : Color.suiteBlue
                                     : Color.clear
                             )
@@ -701,10 +729,7 @@ struct P9EditorSheet: View {
                             .fill(
                                 isSelected
                                     ? Color.suiteBlue
-                                    : MIDIKeygroupTriggerMatcher.matches(
-                                        keygroup,
-                                        activeNotes: midiMonitor.activeNotes
-                                    )
+                                    : audition.isKeygroupHeld(keygroup)
                                         ? Color.suiteSlab3
                                         : Color.clear
                             )
@@ -783,8 +808,9 @@ struct P9EditorSheet: View {
                 Spacer()
                 Menu("Select") {
                     Button("Select All Keygroups") {
-                        selection = Set(document.program.keygroups.indices)
+                        selectAllKeygroups()
                     }
+                    .keyboardShortcut("a", modifiers: .command)
                     Button("Keep First Selected Only") {
                         if let first =
                             selection.sorted().first
@@ -989,9 +1015,10 @@ struct P9EditorSheet: View {
                 Button(applyButtonTitle) { applyCurrentEdits() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                    .accessibilityIdentifier("p9-bulk-apply-button")
                     .disabled(!canApply)
             }
-            Button("Save Edited Copy…") { saveCopy() }
+            Button("Save P9 As…") { saveP9As() }
                 .buttonStyle(SuiteSecondaryButtonStyle())
                 .disabled(
                     document.pendingKeygroupPaste != nil
@@ -1003,7 +1030,9 @@ struct P9EditorSheet: View {
                 .help(
                     document.pendingKeygroupPaste != nil
                         ? "Add the pasted keygroups before saving"
-                        : "Save the edited program as a new P9 file"
+                        : document.source.isExistingImageProgram
+                            ? "Create a new P9 in the current IMG or save one to the filesystem"
+                            : "Save the program as a standalone P9 file"
                 )
             if document.source.isNewImageProgram {
                 Button("Create in IMG…") {
@@ -1016,16 +1045,6 @@ struct P9EditorSheet: View {
                 )
             }
             if document.source.isExistingImageProgram {
-                Button("Save as New in IMG…") {
-                    showSaveAsNewInImagePrompt = true
-                }
-                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
-                .disabled(!canSaveAsNewInImage)
-                .help(
-                    document.pendingKeygroupPaste != nil
-                        ? "Apply the pasted keygroups before saving"
-                        : "Create and byte-verify a renamed copy in this IMG while preserving the original P9"
-                )
                 Button("Overwrite in IMG…") {
                     showOverwriteConfirmation = true
                 }
@@ -1090,24 +1109,13 @@ struct P9EditorSheet: View {
               !document.isCreatingInImage,
               !document.isImportingDrumRack
         else { return false }
-        return document.hasChanges || canApply
+        return true
     }
 
     private var canCreateInImage: Bool {
         onCreateP9InImage != nil
             && document.source.isNewImageProgram
             && !document.program.keygroups.isEmpty
-            && document.pendingKeygroupPaste == nil
-            && !document.isPreparingKeygroupPaste
-            && !document.isOverwritingInImage
-            && !document.isCreatingInImage
-            && !document.isImportingDrumRack
-    }
-
-    private var canSaveAsNewInImage: Bool {
-        onSaveP9AsNewInImage != nil
-            && document.source.isExistingImageProgram
-            && document.hasChanges
             && document.pendingKeygroupPaste == nil
             && !document.isPreparingKeygroupPaste
             && !document.isOverwritingInImage
@@ -1137,7 +1145,7 @@ struct P9EditorSheet: View {
                 if announce {
                     message =
                         "Applied \(pending.count) pasted keygroup"
-                        + "\(pending.count == 1 ? "" : "s"). Save Edited Copy when ready."
+                        + "\(pending.count == 1 ? "" : "s"). Save P9 As when ready."
                 }
             } catch {
                 errorMessage =
@@ -1164,6 +1172,11 @@ struct P9EditorSheet: View {
         guard let target = pendingSelectionAfterBulkEdits else { return }
         pendingSelectionAfterBulkEdits = nil
         selection = target
+    }
+
+    private func selectAllKeygroups() {
+        selection = Set(document.program.keygroups.indices)
+        keygroupSelectionAnchor = document.program.keygroups.indices.first
     }
 
     private func prepareSpread() {
@@ -1327,6 +1340,17 @@ struct P9EditorSheet: View {
             }
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func saveP9As() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        applyCurrentEdits(announce: false)
+        if document.source.isExistingImageProgram,
+           onSaveP9AsNewInImage != nil {
+            showSaveP9Destination = true
+        } else {
+            saveCopy()
         }
     }
 
@@ -1981,9 +2005,14 @@ private struct IndividualP9KeygroupEditor: View {
 private struct P9BoundedNumberField: View {
     @Binding var value: Int
     let range: ClosedRange<Int>
+    var accessibilityIdentifier: String? = nil
 
     var body: some View {
-        P9DraggableNumberTextField(value: $value, range: range)
+        P9DraggableNumberTextField(
+            value: $value,
+            range: range,
+            accessibilityIdentifier: accessibilityIdentifier
+        )
             .frame(width: 58)
             .help("Type a value, drag up or down, or use the arrow buttons")
     }
@@ -1992,6 +2021,7 @@ private struct P9BoundedNumberField: View {
 private struct P9DraggableNumberTextField: NSViewRepresentable {
     @Binding var value: Int
     let range: ClosedRange<Int>
+    let accessibilityIdentifier: String?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -2004,6 +2034,9 @@ private struct P9DraggableNumberTextField: NSViewRepresentable {
         field.font = NSFont(name: "JetBrainsMono-Regular", size: 11)
         field.delegate = context.coordinator
         context.coordinator.field = field
+        if let accessibilityIdentifier {
+            field.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
 
         let pan = NSPanGestureRecognizer(
             target: context.coordinator,
@@ -2083,6 +2116,73 @@ private struct P9DraggableNumberTextField: NSViewRepresentable {
     }
 }
 
+private enum P9BulkOperationChoice: String, CaseIterable, Identifiable {
+    case unchanged = "Unchanged"
+    case set = "Set"
+    case adjust = "Adjust"
+
+    var id: Self { self }
+
+    init(operation: P9BulkMode?) {
+        switch operation {
+        case .set: self = .set
+        case .adjust: self = .adjust
+        case nil: self = .unchanged
+        }
+    }
+
+    var operation: P9BulkMode? {
+        switch self {
+        case .unchanged: nil
+        case .set: .set
+        case .adjust: .adjust
+        }
+    }
+}
+
+private struct P9BulkOperationPicker: NSViewRepresentable {
+    @Binding var selection: P9BulkOperationChoice
+    let accessibilityIdentifier: String?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        picker.controlSize = .small
+        picker.addItems(
+            withTitles: P9BulkOperationChoice.allCases.map(\.rawValue)
+        )
+        picker.target = context.coordinator
+        picker.action = #selector(Coordinator.selectionChanged(_:))
+        if let accessibilityIdentifier {
+            picker.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
+        return picker
+    }
+
+    func updateNSView(_ picker: NSPopUpButton, context: Context) {
+        context.coordinator.parent = self
+        picker.selectItem(withTitle: selection.rawValue)
+    }
+
+    final class Coordinator: NSObject {
+        var parent: P9BulkOperationPicker
+
+        init(parent: P9BulkOperationPicker) {
+            self.parent = parent
+        }
+
+        @objc func selectionChanged(_ sender: NSPopUpButton) {
+            guard let title = sender.selectedItem?.title,
+                  let choice = P9BulkOperationChoice(rawValue: title)
+            else { return }
+            parent.selection = choice
+        }
+    }
+}
+
 private struct BulkP9KeygroupEditor: View {
     @Binding var edits: P9BulkEdits
     @Binding var loudSampleExpanded: Bool
@@ -2091,7 +2191,10 @@ private struct BulkP9KeygroupEditor: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Only checked fields will change. “Adjust” adds or subtracts the value from every selected keygroup.")
+                Text(
+                    "Choose Set or Adjust to activate a field. Unchanged fields are left alone; "
+                        + "Adjust adds or subtracts the value from every selected keygroup."
+                )
                     .font(SuiteFont.regular(11))
                     .foregroundStyle(Color.suiteUnit)
 
@@ -2139,7 +2242,12 @@ private struct BulkP9KeygroupEditor: View {
                             bulkRow("Attack", \.envAttack, range: 0...99)
                             bulkRow("Decay", \.envDecay, range: 0...99)
                             bulkRow("Sustain", \.envSustain, range: 0...99)
-                            bulkRow("Release", \.envRelease, range: 0...99)
+                            bulkRow(
+                                "Release",
+                                \.envRelease,
+                                range: 0...99,
+                                accessibilityID: "p9-bulk-amplitude-release"
+                            )
                         }
                         bulkGroup("Velocity Sensitivity") {
                             bulkRow("Loudness", \.velocityLoudness, range: 0...99)
@@ -2172,17 +2280,29 @@ private struct BulkP9KeygroupEditor: View {
                 optionalBooleanPicker("Velocity crossfade", value: binding(\.velocityCrossfade))
                 optionalBooleanPicker("One-shot", value: binding(\.oneShot))
                 bulkRow("LFO depth", \.lfoDepth, range: 0...99)
-                Picker("MIDI channel", selection: binding(\.midiChannel)) {
-                    Text("Unchanged").tag(Int?.none)
-                    ForEach(1...16, id: \.self) { channel in
-                        Text("\(channel)").tag(Optional(channel))
+                HStack(spacing: 8) {
+                    Text("MIDI channel")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Picker("", selection: binding(\.midiChannel)) {
+                        Text("Unchanged").tag(Int?.none)
+                        ForEach(1...16, id: \.self) { channel in
+                            Text("\(channel)").tag(Optional(channel))
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 160)
                 }
-                Picker("Output", selection: binding(\.output)) {
-                    Text("Unchanged").tag(P9Output?.none)
-                    ForEach(P9Output.standardChoices) { output in
-                        Text(output.displayName).tag(Optional(output))
+                HStack(spacing: 8) {
+                    Text("Output")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Picker("", selection: binding(\.output)) {
+                        Text("Unchanged").tag(P9Output?.none)
+                        ForEach(P9Output.standardChoices) { output in
+                            Text(output.displayName).tag(Optional(output))
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 160)
                 }
             }
             .padding(6)
@@ -2226,32 +2346,36 @@ private struct BulkP9KeygroupEditor: View {
     private func bulkRow(
         _ title: String,
         _ keyPath: WritableKeyPath<P9BulkEdits, P9BulkNumberEdit>,
-        range: ClosedRange<Int>
+        range: ClosedRange<Int>,
+        accessibilityID: String? = nil
     ) -> some View {
         let field = binding(keyPath)
-        return HStack {
-            Toggle(title, isOn: Binding(
-                get: { field.wrappedValue.enabled },
-                set: { field.wrappedValue.enabled = $0 }
-            ))
-            Spacer()
-            Group {
-                Picker("", selection: Binding(
-                    get: { field.wrappedValue.mode },
-                    set: { field.wrappedValue.mode = $0 }
-                )) {
-                    ForEach(P9BulkMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 90)
+        let operation = Binding<P9BulkOperationChoice>(
+            get: { P9BulkOperationChoice(operation: field.wrappedValue.operation) },
+            set: { choice in
+                var updated = field.wrappedValue
+                updated.operation = choice.operation
+                field.wrappedValue = updated
+            }
+        )
+        return HStack(spacing: 8) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            P9BulkOperationPicker(
+                selection: operation,
+                accessibilityIdentifier:
+                    accessibilityID.map { "\($0)-operation" }
+            )
+            .frame(width: 112)
+            HStack(spacing: 3) {
                 P9BoundedNumberField(
                     value: Binding(
                         get: { field.wrappedValue.value },
                         set: { field.wrappedValue.value = $0 }
                     ),
-                    range: field.wrappedValue.mode == .set ? range : -128...128
+                    range: field.wrappedValue.mode == .set ? range : -128...128,
+                    accessibilityIdentifier:
+                        accessibilityID.map { "\($0)-value" }
                 )
                 Stepper(
                     "",
@@ -2263,7 +2387,8 @@ private struct BulkP9KeygroupEditor: View {
                 )
                 .labelsHidden()
             }
-            .disabled(!field.wrappedValue.enabled)
+            .frame(width: 86, alignment: .trailing)
+            .disabled(operation.wrappedValue == .unchanged)
         }
     }
 
@@ -2280,12 +2405,18 @@ private struct BulkP9KeygroupEditor: View {
         _ title: String,
         value: Binding<String?>
     ) -> some View {
-        Picker(title, selection: value) {
-            Text("Unchanged").tag(String?.none)
-            Text("No sample").tag(String?.some(""))
-            ForEach(availableSampleNames, id: \.self) { sampleName in
-                Text(sampleName).tag(String?.some(sampleName))
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Picker("", selection: value) {
+                Text("Unchanged").tag(String?.none)
+                Text("No sample").tag(String?.some(""))
+                ForEach(availableSampleNames, id: \.self) { sampleName in
+                    Text(sampleName).tag(String?.some(sampleName))
+                }
             }
+            .labelsHidden()
+            .frame(width: 206)
         }
     }
 
@@ -2295,10 +2426,16 @@ private struct BulkP9KeygroupEditor: View {
         falseLabel: String,
         value: Binding<Bool?>
     ) -> some View {
-        Picker(title, selection: value) {
-            Text("Unchanged").tag(Bool?.none)
-            Text(trueLabel).tag(Bool?.some(true))
-            Text(falseLabel).tag(Bool?.some(false))
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Picker("", selection: value) {
+                Text("Unchanged").tag(Bool?.none)
+                Text(trueLabel).tag(Bool?.some(true))
+                Text(falseLabel).tag(Bool?.some(false))
+            }
+            .labelsHidden()
+            .frame(width: 160)
         }
     }
 

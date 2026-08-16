@@ -1,4 +1,4 @@
-# EDIT950 1.8.37
+# EDIT950 1.8.47
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -10,7 +10,75 @@ release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
 
-Version 1.8.37 build 55 adds a recent-IMG launch dashboard with verified working
+Version 1.8.47 build 68 collects the new program and sample audition workflow,
+clear IMG identity and file associations, reorganized header, manual update
+checking, loaded-IMG companion actions and simplified P9 Save As workflow added
+since the 1.8.37 public release.
+
+**Known issue:** bulk P9 edits are not reliable for any selection of more than
+one keygroup. This is not confined to Release or Select All. Edit one keygroup
+at a time in 1.8.47 and follow
+[issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
+
+Version 1.8.46 build 67 replaces the bulk numeric operation picker with an
+explicit native **Unchanged / Set / Adjust** control. The later live-workflow
+report in issue #6 supersedes the earlier belief that this resolved bulk edits.
+
+Version 1.8.45 build 66 replaces misleading inactive bulk-edit checkboxes with
+one explicit **Unchanged / Set / Adjust** operation menu per numeric field. The
+multi-keygroup application path remains a known issue. One **Save
+P9 As…** action chooses between the filesystem and a verified renamed P9 in the
+current IMG, and unchanged programs may be deliberately duplicated or
+overwritten.
+
+Version 1.8.44 build 65 moves **OPEN IN FIND** and **SEND TO PLAY** off the
+recent-images home screen and into the loaded IMG's inspector Actions section.
+The handoff target is therefore always the IMG currently open in EDIT950.
+
+Version 1.8.43 build 64 reorganizes the main audition strip into clear Input,
+Audition Routing, Computer Keys and Activity groups with consistently styled
+P9 and keygroup-channel menus. The launch screen now links directly to the
+GitHub User Manual instead of rotating hints. EDIT950 also checks GitHub once
+per launch and shows a non-modal release-page link only when a newer version is
+available; it never installs an update automatically.
+
+Version 1.8.42 build 63 adds an explicit **AUDITION PROGRAM** dropdown to the
+main screen. Its P9 choice is independent of file-table selection, so browsing,
+sorting, editing and exporting other rows neither changes the audition target
+nor stops held notes. The Program editor temporarily takes over audition while
+open and returns to the dropdown program when closed.
+
+Version 1.8.41 build 62 prepares P9 data alongside the S9 audition cache when
+an IMG opens. A newly selected main-table program is therefore ready for MIDI
+and computer-keyboard audition immediately, with no notes silently lost to a
+later P9 export. The Program editor and main-table yellow S9 indicator continue
+to use the same shared audition engine.
+
+Version 1.8.40 build 61 fixes stale main-table audition cells. Every S9 play
+button now becomes active when its asynchronous cache is ready, including all
+samples tested in BEAT-DISK and HARDBREAK. The same live cell renders a visible
+yellow spot on the S9 most recently triggered from external MIDI or the computer
+keyboard.
+
+Version 1.8.39 build 60 adds confirmed Finder associations for IMG, P9 and S9
+files from Settings, an explicit Close IMG toolbar action, and a detailed IMG
+identity header with path, access mode and file-type counts. S9 audition now
+converts source audio to the active output-device sample rate, and bandwidth
+conversion no longer interrupts the sound already playing. P9 MIDI/computer-key
+audition self-recovers if its audio engine stops; Panic also restarts that
+engine, and recovery activity is recorded in the diagnostic log.
+
+Version 1.8.38 build 59 adds eight-voice P9 program audition from external MIDI
+or an Ableton-style Mac keyboard in both the main browser and program editor.
+The shared controls include Omni/direct P9 keygroup-channel routing and Panic;
+live feedback identifies the input source, physical key, note, input and routed
+channels and velocity for three seconds, while the main-table dot follows each
+newest triggered Soft-layer S9 in
+real time. Non-Omni input rejects channels outside the selected base/offset
+routing. Playback follows PLAY950's voice
+stealing, tuning, Constant Pitch, loop, amplitude-envelope and filter rules.
+
+Version 1.8.37 build 55 added a recent-IMG launch dashboard with verified working
 copy, FIND950 and PLAY950 actions, double-click loading and 200 rotating hints.
 The main browser keeps IMG capacity visible in its header. System, Light and Dark
 appearances are selectable, and Display zoom applies to the launch screen, main
@@ -204,7 +272,7 @@ Open a standalone P9 from **File → Open S950 P9 Program…**, double-click a P
 
 ![EDIT950 P9 keygroup editor](Screenshots/edit950-p9-editor.png)
 
-The editor supports individual, selected and all-keygroup editing for:
+The editor exposes individual, selected and all-keygroup controls for:
 
 - key and velocity ranges, velocity crossfade and its optional custom midpoint;
 - soft and loud sample names;
@@ -214,13 +282,16 @@ The editor supports individual, selected and all-keygroup editing for:
 - MIDI channel and audio output;
 - constant pitch and one-shot.
 
+In 1.8.47, do not rely on these controls to apply an edit to more than one
+keygroup. Edit one keygroup at a time until issue #6 is resolved.
+
 Fine tuning is displayed exactly as the S950 shows it: the nearest semitone plus a signed −8…+7 Fine value in native 1/16-semitone steps. For example, a raw tuning of 380 is shown as Transpose `+24`, Fine `−04`, matching the sampler rather than the mathematically equivalent `+23`, `+12`.
 
 The editor uses a compact two-column parameter layout. Loud Sample controls can be collapsed, and the **Apply** button remains visible in the footer for both individual and multiple-keygroup editing.
 
 The program name in the editor header is intentionally read-only. It is the program’s internal P9 identity, not an ordinary label. Choose the name when creating a program, use **Save Edited Copy…** for a differently named local file, or use **Rename S9/P9…** on a P9 in the IMG browser to change its directory and internal names transactionally.
 
-Soft and Loud sample fields are dropdown menus populated with the S9 samples present in the open volume. **No sample** clears a layer. If an existing P9 references a sample not currently present, that reference remains available in the menu so merely opening the editor cannot lose it. The bulk editor offers the same choices, including **Unchanged**. Choosing a Soft sample updates the selected keygroup’s list name immediately; **Apply** still controls when the complete draft is committed.
+Soft and Loud sample fields are dropdown menus populated with the S9 samples present in the open volume. **No sample** clears a layer. If an existing P9 references a sample not currently present, that reference remains available in the menu so merely opening the editor cannot lose it. The multi-keygroup editor displays the same choices, including **Unchanged**, but the known application fault means those controls must not be relied upon for more than one selected keygroup in this release.
 
 Use **Add** below the keygroup list to duplicate the selected keygroup, including all its musical settings. Use **Delete** to remove one or more selected keygroups. The editor always retains at least one keygroup and renumbers the remaining list. Any insertion or deletion clears only the sampler-maintained program/keygroup RAM links affected by structural changes; musical settings, unknown bytes and undocumented flag bits remain intact.
 

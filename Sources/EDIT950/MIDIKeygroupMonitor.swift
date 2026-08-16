@@ -239,6 +239,8 @@ final class MIDIKeygroupMonitor: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var lastEvent: MIDIInputEventEnvelope?
 
+    var eventHandler: ((MIDIInputEventEnvelope) -> Void)?
+
     private var client = MIDIClientRef()
     private var inputPort = MIDIPortRef()
     private var connectedSources: [MIDIEndpointRef] = []
@@ -382,10 +384,12 @@ final class MIDIKeygroupMonitor: ObservableObject {
 
     private func publish(_ event: MIDIInputEvent, description: String) {
         eventSequence &+= 1
-        lastEvent = MIDIInputEventEnvelope(
+        let envelope = MIDIInputEventEnvelope(
             sequence: eventSequence,
             event: event
         )
+        lastEvent = envelope
         lastEventDescription = description
+        eventHandler?(envelope)
     }
 }

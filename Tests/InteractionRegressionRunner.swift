@@ -105,7 +105,13 @@ struct InteractionRegressionRunner {
                 throw RegressionFailure("Could not create the native S9 seed.")
             }
             let programSeed = nativeDirectory.appendingPathComponent("DELETEP9.P9")
-            try FileManager.default.copyItem(at: nativeSample, to: programSeed)
+            let nativeSampleData = try Data(contentsOf: nativeSample)
+            let nativeSampleName = try S9NativeSample.internalName(in: nativeSampleData)
+            var seededProgram = try P9Program.blank(named: "DELETEP9")
+            seededProgram.keygroups[0].softSampleName = nativeSampleName
+            seededProgram.keygroups[0].envelope.release = 99
+            seededProgram.keygroups[0].midiChannelOffset = 2
+            try seededProgram.encoded().write(to: programSeed, options: .atomic)
             _ = try await seedingController.send(
                 try AkaiCommandBuilder.importNative(filename: programSeed.lastPathComponent)
             )
@@ -251,6 +257,16 @@ struct InteractionRegressionRunner {
             suitePreferences.zoom = .oneHundred
             print("✓ Fixed header remains visible while the welcome screen responds at every zoom")
 
+            let welcomeActions = renderedText(in: hostingView)
+            guard !welcomeActions.contains("OPEN IN FIND"),
+                  !welcomeActions.contains("SEND TO PLAY")
+            else {
+                throw RegressionFailure(
+                    "Companion-app actions remained on the recent-IMG home screen."
+                )
+            }
+            print("✓ Companion-app actions are absent from the recent-IMG home screen")
+
             guard let recentTable = findTable(
                 in: hostingView,
                 expectedRowCount: 1,
@@ -303,6 +319,65 @@ struct InteractionRegressionRunner {
                 )
             }
             print("✓ Double-clicking a recent IMG row loads the image")
+
+            var headerAttempts = 0
+            while (model.isBusy || model.snapshot.files.isEmpty) && headerAttempts < 300 {
+                try await Task.sleep(nanoseconds: 20_000_000)
+                headerAttempts += 1
+            }
+            hostingView.layoutSubtreeIfNeeded()
+            guard let headerSummary = model.imgHeaderSummary,
+                  headerSummary.name == image.lastPathComponent,
+                  headerSummary.path == image.path,
+                  !headerSummary.readOnly,
+                  headerSummary.totalFileCount == model.snapshot.fileCount,
+                  headerSummary.p9FileCount == model.p9FileCount,
+                  headerSummary.s9FileCount == model.s9FileCount
+            else {
+                throw RegressionFailure(
+                    "The IMG header did not expose its name, path, access mode and file counts."
+                )
+            }
+            print("✓ IMG header shows path, writable state, total files, P9 and S9 counts")
+
+            guard let freshlyLoadedProgram = model.snapshot.files.first(where: {
+                $0.name.caseInsensitiveCompare("DELETEP9.P9") == .orderedSame
+            }) else {
+                throw RegressionFailure(
+                    "The freshly loaded IMG did not contain the P9 audition fixture."
+                )
+            }
+            hostingView.layoutSubtreeIfNeeded()
+            let auditionStripText = renderedText(in: hostingView)
+            guard auditionStripText.contains(where: { $0 == "SELECT P9" })
+            else {
+                throw RegressionFailure(
+                    "The main audition strip did not render its independent P9 picker. "
+                        + "Visible text: \(auditionStripText.joined(separator: " | "))"
+                )
+            }
+            model.selectMainProgramForAudition(freshlyLoadedProgram.id)
+            hostingView.layoutSubtreeIfNeeded()
+            guard renderedText(in: hostingView).contains(where: {
+                $0.caseInsensitiveCompare("DELETEP9") == .orderedSame
+            }) else {
+                throw RegressionFailure(
+                    "The audition-program menu did not display its chosen P9."
+                )
+            }
+            model.programAudition.setHardwareMIDIEnabled(true)
+            model.programAudition.setComputerKeyboardEnabled(true)
+            guard model.programAudition.targetName == "DELETEP9",
+                  !model.programAudition.isPreparingProgram
+            else {
+                throw RegressionFailure(
+                    "A freshly loaded main-table P9 was not immediately ready for MIDI/keyboard audition."
+                )
+            }
+            model.programAudition.setHardwareMIDIEnabled(false)
+            model.programAudition.setComputerKeyboardEnabled(false)
+            model.selectMainProgramForAudition(nil)
+            print("✓ Independent P9 dropdown makes a freshly loaded program immediately ready for audition")
 
             let dismissibleErrorText = "TEST FULL DISK ACCESS ERROR"
             model.report = OperationReport(
@@ -371,6 +446,10 @@ struct InteractionRegressionRunner {
             }
             print("✓ Located previous/next WAV zero crossings with directions")
             let audition = SampleLoopAuditionController()
+            var renderedAuditionAudio = false
+            audition.onRenderedAudioForTesting = {
+                renderedAuditionAudio = true
+            }
             audition.play(
                 url: markerWAV,
                 start: Int(sourceMarkers[0]),
@@ -380,6 +459,16 @@ struct InteractionRegressionRunner {
             guard audition.isPlaying, audition.errorMessage == nil else {
                 throw RegressionFailure(
                     "The temporary WAV loop could not be auditioned: \(audition.errorMessage ?? "unknown error")"
+                )
+            }
+            var renderedAudioAttempts = 0
+            while !renderedAuditionAudio && renderedAudioAttempts < 100 {
+                try await Task.sleep(nanoseconds: 10_000_000)
+                renderedAudioAttempts += 1
+            }
+            guard renderedAuditionAudio else {
+                throw RegressionFailure(
+                    "The 44.1 kHz audition graph produced no audio at the current output rate."
                 )
             }
             let bandwidthPreview = workspace.appendingPathComponent(
@@ -762,6 +851,246 @@ struct InteractionRegressionRunner {
                     "Export Selected remained disabled for a selected P9."
                 )
             }
+
+            model.programAudition.setMIDIChannelSelection(2)
+            model.selectMainProgramForAudition(program.id)
+            model.programAudition.setHardwareMIDIEnabled(true)
+            model.programAudition.setComputerKeyboardEnabled(true)
+            for _ in 0..<200 where model.programAudition.isPreparingProgram
+                || model.programAudition.targetName == nil {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            hostingView.layoutSubtreeIfNeeded()
+            guard model.programAudition.targetName == "DELETEP9",
+                  !model.programAudition.isPreparingProgram
+            else {
+                throw RegressionFailure(
+                    "The selected main-table P9 or shared audition controls were not prepared "
+                        + "(target: \(model.programAudition.targetName ?? "nil"); "
+                        + "status: \(model.programAudition.status))."
+                )
+            }
+            guard let idleAuditionBitmap = hostingView.bitmapImageRepForCachingDisplay(
+                in: hostingView.bounds
+            ) else {
+                throw RegressionFailure("Could not render the idle audition controls.")
+            }
+            hostingView.cacheDisplay(in: hostingView.bounds, to: idleAuditionBitmap)
+            let idleAuditionPNG = idleAuditionBitmap.representation(using: .png, properties: [:])
+            guard let routedKeyDown = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "d",
+                charactersIgnoringModifiers: "d",
+                isARepeat: false,
+                keyCode: 2
+            ), let routedKeyUp = NSEvent.keyEvent(
+                with: .keyUp,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "d",
+                charactersIgnoringModifiers: "d",
+                isARepeat: false,
+                keyCode: 2
+            ) else {
+                throw RegressionFailure(
+                    "Could not create routed main-window computer-key events."
+                )
+            }
+            window.makeKey()
+            window.makeFirstResponder(table)
+            NSApplication.shared.sendEvent(routedKeyDown)
+            try await Task.sleep(nanoseconds: 20_000_000)
+            guard model.programAudition.heldNotes.contains(where: {
+                $0.source == .computerKeyboard
+                    && $0.physicalKey == "D"
+                    && $0.note == 64
+            }) else {
+                throw RegressionFailure(
+                    "The main window did not route a real computer-key event into program audition."
+                )
+            }
+            guard let browsedFile = model.snapshot.files.first(where: {
+                $0.id != program.id
+            }) else {
+                throw RegressionFailure(
+                    "The disposable IMG did not contain a second row for independent selection testing."
+                )
+            }
+            NativeFileTableSelection.select(
+                browsedFile,
+                modifiers: [],
+                model: model,
+                window: window
+            )
+            try await Task.sleep(nanoseconds: 20_000_000)
+            guard model.mainProgramAuditionFileID == program.id,
+                  model.programAudition.targetName == "DELETEP9",
+                  model.programAudition.heldNotes.contains(where: {
+                      $0.source == .computerKeyboard && $0.physicalKey == "D"
+                  })
+            else {
+                throw RegressionFailure(
+                    "Changing the file-table selection changed or stopped the dropdown audition program."
+                )
+            }
+            NativeFileTableSelection.select(
+                program,
+                modifiers: [],
+                model: model,
+                window: window
+            )
+            NSApplication.shared.sendEvent(routedKeyUp)
+            try await Task.sleep(nanoseconds: 20_000_000)
+            guard !model.programAudition.heldNotes.contains(where: {
+                $0.source == .computerKeyboard && $0.physicalKey == "D"
+            }) else {
+                throw RegressionFailure(
+                    "The main window did not route computer-key release into program audition."
+                )
+            }
+            guard let keyDown = NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "a",
+                charactersIgnoringModifiers: "a",
+                isARepeat: false,
+                keyCode: 0
+            ), let keyUp = NSEvent.keyEvent(
+                with: .keyUp,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: "a",
+                charactersIgnoringModifiers: "a",
+                isARepeat: false,
+                keyCode: 0
+            ) else {
+                throw RegressionFailure("Could not create computer MIDI keyboard events.")
+            }
+            guard model.programAudition.handleComputerKeyDown(keyDown) else {
+                throw RegressionFailure("The Ableton A-key mapping was not consumed.")
+            }
+            model.programAudition.receiveExternalMIDI(
+                .noteOn(
+                    key: MIDINoteKey(channel: 0, note: 60),
+                    velocity: 90
+                )
+            )
+            try await Task.sleep(nanoseconds: 20_000_000)
+            hostingView.layoutSubtreeIfNeeded()
+            guard model.programAudition.heldNotes.count == 2,
+                  model.programAudition.heldNotes.contains(where: {
+                    $0.source == .computerKeyboard
+                        && $0.summary.contains("A → C3")
+                        && $0.summary.contains("MIDI 60")
+                        && $0.summary.contains("KG CH 3")
+                  }),
+                  model.programAudition.heldNotes.contains(where: {
+                    $0.source == .externalMIDI
+                        && $0.summary.contains("IN CH 1 → KG CH 3")
+                        && $0.summary.contains("VEL 90")
+                  })
+            else {
+                throw RegressionFailure(
+                    "Live visual feedback did not distinguish the computer key and external MIDI note."
+                )
+            }
+            guard let heldAuditionBitmap = hostingView.bitmapImageRepForCachingDisplay(
+                in: hostingView.bounds
+            ) else {
+                throw RegressionFailure("Could not render held-note feedback.")
+            }
+            hostingView.cacheDisplay(in: hostingView.bounds, to: heldAuditionBitmap)
+            guard let heldAuditionPNG = heldAuditionBitmap.representation(
+                using: .png,
+                properties: [:]
+            ), heldAuditionPNG != idleAuditionPNG else {
+                throw RegressionFailure(
+                    "Held MIDI and computer notes did not visibly change the rendered main screen."
+                )
+            }
+            var showedSoundingSample = false
+            for _ in 0..<20 {
+                if !model.programAuditionIndicatedSampleIDs.isEmpty {
+                    showedSoundingSample = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            guard showedSoundingSample else {
+                throw RegressionFailure(
+                    "The main table never exposed the Soft sample sounding from program audition."
+                )
+            }
+            guard let indicatedSampleID = model.programAuditionIndicatedSampleIDs.first,
+                  let indicatedRow = model.displayedFiles.firstIndex(where: {
+                      $0.id == indicatedSampleID
+                  })
+            else {
+                throw RegressionFailure(
+                    "The triggered program-audition S9 could not be located in the main table."
+                )
+            }
+            var renderedYellowSpot = false
+            for _ in 0..<40 {
+                hostingView.layoutSubtreeIfNeeded()
+                if let auditionCell = table.view(
+                    atColumn: 1,
+                    row: indicatedRow,
+                    makeIfNecessary: true
+                ), suiteYellowPixelRatio(in: auditionCell) > 0.02 {
+                    renderedYellowSpot = true
+                    break
+                }
+                try await Task.sleep(nanoseconds: 5_000_000)
+            }
+            guard renderedYellowSpot else {
+                throw RegressionFailure(
+                    "The main-table audition cell did not render its yellow triggered-sample spot."
+                )
+            }
+            model.programAudition.receiveExternalMIDI(
+                .noteOff(
+                    key: MIDINoteKey(channel: 0, note: 60),
+                    velocity: 0
+                )
+            )
+            guard model.programAudition.heldNotes.count == 1,
+                  model.programAudition.heldNotes[0].source == .computerKeyboard
+            else {
+                throw RegressionFailure(
+                    "External MIDI Note Off incorrectly cleared the held computer key."
+                )
+            }
+            guard model.programAudition.handleComputerKeyUp(keyUp),
+                  model.programAudition.heldNotes.isEmpty,
+                  model.programAudition.visibleNotes.count == 1,
+                  !model.programAuditionIndicatedSampleIDs.isEmpty
+            else {
+                throw RegressionFailure(
+                    "Computer key-up did not retain its note and S9 feedback."
+                )
+            }
+            model.programAudition.panic()
+            model.programAudition.setHardwareMIDIEnabled(false)
+            model.programAudition.setComputerKeyboardEnabled(false)
+            model.selectMainProgramForAudition(nil)
+            print("✓ Dropdown audition survives table browsing and renders MIDI/keyboard S9 feedback")
+
             if let sampleRow = model.snapshot.files.firstIndex(where: {
                 $0.id != program.id
             }) {
@@ -1431,6 +1760,41 @@ struct InteractionRegressionRunner {
                 )
             }
             print("✓ Saved an edited P9 directly into the IMG as a verified renamed copy")
+
+            let fileCountBeforeUnchangedCopy = model.snapshot.fileCount
+            guard !newProgram.hasChanges else {
+                throw RegressionFailure(
+                    "The verified P9 copy was unexpectedly dirty before unchanged-save testing."
+                )
+            }
+            try await model.performSaveP9AsNewInImage(
+                newProgram,
+                requestedName: "TEST CLONE"
+            )
+            guard !newProgram.hasChanges,
+                  newProgram.source.filename == "TEST CLONE.P9",
+                  model.snapshot.fileCount == fileCountBeforeUnchangedCopy + 1,
+                  model.snapshot.files.contains(where: {
+                      $0.name.caseInsensitiveCompare("TEST CLONE.P9") == .orderedSame
+                  })
+            else {
+                throw RegressionFailure(
+                    "An unchanged P9 could not be saved and verified under a new IMG name."
+                )
+            }
+            let unchangedOverwrite = try await model.performP9Overwrite(
+                newProgram,
+                createBackup: false
+            )
+            guard unchangedOverwrite.backupURL == nil,
+                  unchangedOverwrite.verifiedByteCount == newProgram.originalData.count,
+                  !newProgram.hasChanges
+            else {
+                throw RegressionFailure(
+                    "An unchanged P9 could not be overwritten and byte-verified in the IMG."
+                )
+            }
+            print("✓ Unchanged P9 can be saved under a new IMG name or overwritten and verified")
 
             let imageBeforeAbletonExport = try Data(contentsOf: image)
             let templateURL = URL(
