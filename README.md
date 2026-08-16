@@ -15,8 +15,8 @@
 
 If your old sampler floppies now exist as `.img` files, EDIT950 makes
 them useful on a modern Mac. Open an image and see the original volumes, P9
-programs and S9 samples. Audition samples, export WAVs, inspect the program that
-made a sound work, edit native parameters, or build a clean working image for a
+programs and S9 samples. Audition samples, export WAVs, inspect and edit the program
+that made a sound work, edit native parameters, or build a clean working image for a
 Gotek, another archive or a DAW workflow.
 
 This is for people who:
