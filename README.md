@@ -11,7 +11,7 @@
 
 **User manual:** [Read the EDIT950 musician's guide](Documentation/USER_GUIDE.md).
 
-## Open the S900/S950 disks you thought were stranded in the past
+## Open and *edit* S900/S950 IMG files, P9 programs and S9 samples
 
 If your old sampler floppies now exist as `.img` files, EDIT950 makes
 them useful on a modern Mac. Open an image and see the original volumes, P9
