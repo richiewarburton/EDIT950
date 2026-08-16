@@ -2384,6 +2384,33 @@ struct TestRunner {
             try expect(program.keygroups.allSatisfy { $0.vcfEnvelope.attack == 20 })
         }
 
+        test("P9 bulk operation menu activates a zero release edit and survives save") {
+            let source = makeP9Fixture(keygroupCount: 8)
+            var edits = P9BulkEdits()
+            try expect(edits.envRelease.operation == nil)
+            try expect(!edits.hasChanges)
+
+            edits.envRelease.operation = .set
+            edits.envRelease.value = 0
+            try expect(edits.envRelease.enabled)
+            try expect(edits.envRelease.operation == .set)
+            try expect(edits.hasChanges)
+
+            var program = try P9Program(data: source)
+            program.apply(edits, to: Set(program.keygroups.indices))
+            let saved = try program.encoded()
+            let reopened = try P9Program(data: saved)
+            try expect(reopened.keygroups.allSatisfy { $0.envelope.release == 0 })
+            let expected = Set((0..<8).map {
+                P9Program.headerSize + $0 * P9Program.keygroupSize + 0x06
+            })
+            try expect(Set(source.indices.filter { source[$0] != saved[$0] }) == expected)
+
+            edits.envRelease.operation = nil
+            try expect(!edits.envRelease.enabled)
+            try expect(!edits.hasChanges)
+        }
+
         test("P9 bulk editing assigns available sample names to every selection") {
             var program = try P9Program(data: makeP9Fixture(keygroupCount: 3))
             var edits = P9BulkEdits()

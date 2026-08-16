@@ -30,14 +30,20 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.44 (build 65)**. Requires macOS 14 or later.
+Current source version: **1.8.45 (build 66)**. Requires macOS 14 or later.
 
-### What is new in 1.8.44
+### What is new in 1.8.45
 
-- **OPEN IN FIND** and **SEND TO PLAY** now live with the loaded IMG's actions
-  in the inspector sidebar instead of on the recent-images home screen.
+- Bulk P9 editing now uses one clear **Unchanged / Set / Adjust** menu per field,
+  so exact zero-value edits cannot be left inactive behind a separate checkbox.
+- **Save P9 As…** now chooses between a standalone P9 and a verified renamed
+  copy in the current IMG.
+- Saving as new or deliberately overwriting an unchanged P9 is supported.
+- This candidate also includes the completed main-screen program audition,
+  output-rate-safe sample audition, IMG identity controls, User Manual link,
+  release checking and loaded-IMG companion actions from 1.8.38–1.8.44.
 
-See [the complete 1.8.44 release notes](ReleaseDocs/RELEASE_NOTES_1.8.44.md)
+See [the complete 1.8.45 release notes](ReleaseDocs/RELEASE_NOTES_1.8.45.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
@@ -145,11 +151,16 @@ and optional input-only MIDI triggering.*
 - See its keygroups, Soft/Loud layers, key and velocity ranges, tuning, filter,
   amplitude/VCF envelopes, MIDI channel and output routing.
 - Edit one keygroup or apply controlled bulk changes to several.
+- Activate each bulk field explicitly with Unchanged, Set or Adjust, including
+  exact zero-value edits across every selected keygroup.
 - Spread samples chromatically with tuning compensation.
 - Rename an S9 and update every matching Soft and Loud reference.
 - Copy keygroups and their linked samples between writable IMG files.
 - Import suitable Ableton Drum Rack pads into S9/P9 content.
 - Export a P9 and its Soft samples as a Live 12.4.3 Sampler Drum Rack.
+- Use one **Save P9 As…** action to create a standalone P9 or a verified renamed
+  copy in the current IMG; unchanged programs can also be duplicated or
+  deliberately overwritten.
 - Choose a main-screen P9 from the dedicated audition dropdown, then play it
   from external MIDI or the Ableton-style computer keyboard. The Program editor
   auditions its open program. Sounding Soft S9 rows are

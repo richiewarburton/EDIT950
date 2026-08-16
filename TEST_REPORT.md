@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.44 (build 65)**
+Current source: **1.8.45 (build 66)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -24,11 +24,12 @@ keygroup-channel routing, repeated and channel-isolated notes, source-isolated c
 keys, eight-voice stealing, Soft-layer tuning, Constant Pitch, looping,
 amplitude/filter envelopes, velocity and keyboard tracking, program teardown,
 audio-engine self-recovery on Note On and Panic, byte-preserving keygroup
-reordering and bounded on-screen diagnostic rendering.
+reordering, explicit bulk Set/Adjust activation, zero-value bulk edits and
+bounded on-screen diagnostic rendering.
 It also verifies that bandwidth conversion scales loop endpoints to the
 converted WAV's measured frame count, keeps current audition playback alive
 until the new preview is ready, and exposes the Finder association controls for
-IMG, P9 and S9. The current accepted run completed with **89 passed and 0
+IMG, P9 and S9. The current accepted run completed with **90 passed and 0
 failed**.
 
 The following broader checks are also available:
@@ -58,7 +59,9 @@ The following broader checks are also available:
   through the current 48 kHz output format. It inspects the actual main-table
   audition cell and requires a rendered yellow triggered-S9 spot. It also
   confirms that the recent-IMG home screen no longer exposes companion-app
-  handoff actions.
+  handoff actions. It also creates and byte-verifies a renamed copy of an
+  unchanged P9, then deliberately overwrites and verifies that unchanged P9
+  without requiring a dummy edit.
 - The visual checks render the browser, including its persistent IMG-capacity
   header meter and enlarged fixed-region type, plus the sample editor, zoomed
   program editor, settings views and the loaded-IMG inspector for manual

@@ -841,6 +841,18 @@ struct P9BulkNumberEdit: Equatable {
     var mode: P9BulkMode = .set
     var value = 0
 
+    var operation: P9BulkMode? {
+        get { enabled ? mode : nil }
+        set {
+            guard let newValue else {
+                enabled = false
+                return
+            }
+            enabled = true
+            mode = newValue
+        }
+    }
+
     func applying(to current: Int, range: ClosedRange<Int>) -> Int {
         guard enabled else { return current }
         let proposed = mode == .set ? value : current + value

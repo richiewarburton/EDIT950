@@ -1958,11 +1958,6 @@ final class AppModel: ObservableObject {
                 "Save As New in IMG is available only for a P9 opened from an IMG."
             )
         }
-        guard document.hasChanges else {
-            throw AppError.verificationFailed(
-                "Edit the program before saving a new P9 copy."
-            )
-        }
         let identity = try P9CanonicalName.resolve(
             requestedName,
             existingFilenames: existingP9Filenames
@@ -2188,7 +2183,7 @@ final class AppModel: ObservableObject {
             throw AppError.verificationFailed(
                 "The program name has changed. To overwrite safely, keep the original name "
                     + "\((sourceFilename as NSString).deletingPathExtension). "
-                    + "Use Save Edited Copy to create a renamed program."
+                    + "Use Save P9 As to create a renamed program."
             )
         }
         guard let originalFile = p9File(matchingNameKey: sourceNameKey) else {
@@ -2198,10 +2193,6 @@ final class AppModel: ObservableObject {
         }
 
         let editedData = try document.program.encoded()
-        guard editedData != document.originalData else {
-            throw AppError.verificationFailed("There are no applied P9 changes to overwrite.")
-        }
-
         let workspace = try TemporaryWorkspace(prefix: "akai-p9-overwrite")
         defer { workspace.remove() }
         let stagedFilename = sourceFilename.replacingOccurrences(of: " ", with: "_")
@@ -6496,7 +6487,7 @@ final class AppModel: ObservableObject {
                 + "\(document.source.filename).",
             at: 0
         )
-        lines.append("Click Apply Pasted Keygroups, then use Save Edited Copy…")
+        lines.append("Click Apply Pasted Keygroups, then use Save P9 As…")
         try document.stageKeygroupPaste(
             records: transfer.records,
             sampleNameMapping: sampleNameMapping,

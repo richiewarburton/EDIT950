@@ -28,7 +28,7 @@ struct P9EditorVisualRunner {
             guard try document.program.encoded() == sourceData, !document.hasChanges else {
                 throw P9EditorVisualFailure.roundTrip
             }
-            if (mode == "--overwrite" || mode == "--image"),
+            if mode == "--overwrite",
                !document.program.keygroups.isEmpty {
                 var program = document.program
                 program.keygroups[0].softLoudness += 1

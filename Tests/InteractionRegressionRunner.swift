@@ -1761,6 +1761,41 @@ struct InteractionRegressionRunner {
             }
             print("✓ Saved an edited P9 directly into the IMG as a verified renamed copy")
 
+            let fileCountBeforeUnchangedCopy = model.snapshot.fileCount
+            guard !newProgram.hasChanges else {
+                throw RegressionFailure(
+                    "The verified P9 copy was unexpectedly dirty before unchanged-save testing."
+                )
+            }
+            try await model.performSaveP9AsNewInImage(
+                newProgram,
+                requestedName: "TEST CLONE"
+            )
+            guard !newProgram.hasChanges,
+                  newProgram.source.filename == "TEST CLONE.P9",
+                  model.snapshot.fileCount == fileCountBeforeUnchangedCopy + 1,
+                  model.snapshot.files.contains(where: {
+                      $0.name.caseInsensitiveCompare("TEST CLONE.P9") == .orderedSame
+                  })
+            else {
+                throw RegressionFailure(
+                    "An unchanged P9 could not be saved and verified under a new IMG name."
+                )
+            }
+            let unchangedOverwrite = try await model.performP9Overwrite(
+                newProgram,
+                createBackup: false
+            )
+            guard unchangedOverwrite.backupURL == nil,
+                  unchangedOverwrite.verifiedByteCount == newProgram.originalData.count,
+                  !newProgram.hasChanges
+            else {
+                throw RegressionFailure(
+                    "An unchanged P9 could not be overwritten and byte-verified in the IMG."
+                )
+            }
+            print("✓ Unchanged P9 can be saved under a new IMG name or overwritten and verified")
+
             let imageBeforeAbletonExport = try Data(contentsOf: image)
             let templateURL = URL(
                 fileURLWithPath: FileManager.default.currentDirectoryPath
