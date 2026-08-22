@@ -96,14 +96,27 @@ final class P9LiveAuditionClient {
             object: nil,
             queue: .main
         ) { [weak self] note in
-            Task { @MainActor in self?.receiveAcknowledgement(note) }
+            let instanceID = note.object as? String
+            let revision = note.userInfo?["revision"] as? Int
+            let error = note.userInfo?["error"] as? String
+            MainActor.assumeIsolated {
+                self?.receiveAcknowledgement(
+                    instanceID: instanceID,
+                    revision: revision,
+                    error: error
+                )
+            }
         }
         sessionObserver = center.addObserver(
             forName: Self.sessionNotification,
             object: nil,
             queue: .main
         ) { [weak self] note in
-            Task { @MainActor in self?.receiveSessionState(note) }
+            let instanceID = note.object as? String
+            let state = note.userInfo?["state"] as? String
+            MainActor.assumeIsolated {
+                self?.receiveSessionState(instanceID: instanceID, state: state)
+            }
         }
         center.postNotificationName(
             Self.queryNotification,
@@ -162,21 +175,24 @@ final class P9LiveAuditionClient {
         )
     }
 
-    private func receiveAcknowledgement(_ notification: Notification) {
-        guard notification.object as? String == instanceID,
-              let acknowledgedRevision = notification.userInfo?["revision"] as? Int
+    private func receiveAcknowledgement(
+        instanceID notifyingInstanceID: String?,
+        revision acknowledgedRevision: Int?,
+        error: String?
+    ) {
+        guard notifyingInstanceID == instanceID,
+              let acknowledgedRevision
         else { return }
-        if let error = notification.userInfo?["error"] as? String,
-           !error.isEmpty {
+        if let error, !error.isEmpty {
             onStateChange?(.error(error))
         } else if acknowledgedRevision == revision {
             onStateChange?(.auditioned(acknowledgedRevision))
         }
     }
 
-    private func receiveSessionState(_ notification: Notification) {
-        guard notification.object as? String == instanceID else { return }
-        switch notification.userInfo?["state"] as? String {
+    private func receiveSessionState(instanceID notifyingInstanceID: String?, state: String?) {
+        guard notifyingInstanceID == instanceID else { return }
+        switch state {
         case "connected":
             if let latestData {
                 publish(programData: latestData)
