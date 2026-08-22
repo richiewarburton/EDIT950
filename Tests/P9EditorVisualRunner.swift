@@ -180,8 +180,15 @@ struct P9EditorVisualRunner {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
         valueField.stringValue = "0"
-        window.makeFirstResponder(nil)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        guard window.makeFirstResponder(nil) else {
+            throw P9EditorVisualFailure.bulkReleaseApplyDisabled
+        }
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while Date() < deadline,
+              (!document.hasChanges
+                  || !document.program.keygroups.allSatisfy({ $0.envelope.release == 0 })) {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        }
         guard document.hasChanges,
               document.program.keygroups.allSatisfy({ $0.envelope.release == 0 })
         else {
