@@ -183,6 +183,15 @@ struct P9EditorVisualRunner {
         guard window.makeFirstResponder(nil) else {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+        if !document.hasChanges {
+            valueField.delegate?.controlTextDidEndEditing?(
+                Notification(
+                    name: NSControl.textDidEndEditingNotification,
+                    object: valueField
+                )
+            )
+        }
         let deadline = Date(timeIntervalSinceNow: 2)
         while Date() < deadline,
               (!document.hasChanges
