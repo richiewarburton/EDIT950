@@ -21,9 +21,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-	<string>1.8.47</string>
+	<string>1.8.48</string>
     <key>CFBundleVersion</key>
-	<string>68</string>
+	<string>69</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.music</string>
     <key>LSMinimumSystemVersion</key>
@@ -93,6 +93,24 @@
         <dict>
             <key>CFBundleTypeExtensions</key>
             <array>
+                <string>edit950session</string>
+            </array>
+            <key>CFBundleTypeIconFile</key>
+            <string>AppIcon.icns</string>
+            <key>CFBundleTypeName</key>
+            <string>PLAY950 Live Edit Session</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.e45recordings.edit950.live-session</string>
+            </array>
+        </dict>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array>
                 <string>p9</string>
                 <string>P9</string>
             </array>
@@ -131,6 +149,26 @@
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.json</string>
+                <string>public.data</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>PLAY950 live editing session</string>
+            <key>UTTypeIdentifier</key>
+            <string>com.e45recordings.edit950.live-session</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>edit950session</string>
+                </array>
+                <key>public.mime-type</key>
+                <string>application/vnd.e45recordings.edit950-session+json</string>
+            </dict>
+        </dict>
         <dict>
             <key>UTTypeConformsTo</key>
             <array>

@@ -197,27 +197,41 @@ Display zoom applies to the P9 editor as well as the main browser. Keygroup rows
 show their musical and MIDI ranges and can be dragged to reorder complete
 keygroup records without rebuilding their musical settings.
 
-Use **Save P9 As…** to choose between a standalone P9 file and a new, renamed
-P9 beside the current program in the open IMG. **Overwrite in IMG…** replaces
-the current P9 after the usual backup choice and byte verification. Both IMG
-actions remain available even when the program is unchanged, which is useful
-for making a verified duplicate or deliberately rewriting a suspect directory
-entry.
+Use **Save** or **Command-S** to write a standalone P9 back to its source or to
+save the current program into its IMG after confirmation. The IMG is changed
+only after EDIT950 has prepared and byte-verified a staging image, checked for
+external changes, and atomically replaced the source. **Save P9 As…** chooses
+between a standalone P9 file and a new, renamed P9 beside the current program in
+the open IMG. These IMG actions remain available when the program is unchanged,
+which is useful for making a verified duplicate or deliberately rewriting a
+suspect directory entry.
 
 ## Editing more than one keygroup
 
-The program editor displays bulk Set/Adjust controls when more than one
-keygroup is selected. In 1.8.47, applying those controls is not reliable for
-any selection of more than one keygroup. The limitation is not confined to the
-Release field or to Select All.
+Click a keygroup for a new selection, Command-click to toggle members,
+Shift-click to select a range from the primary keygroup, or press Command-A to
+select all. The first directly clicked keygroup remains primary while the
+selection is built.
 
-Until [issue #6](https://github.com/richiewarburton/EDIT950/issues/6) is resolved,
-edit one keygroup at a time and verify the saved program after reopening it.
-Do not rely on **Apply to Keygroups** for a multi-keygroup selection in this
-release.
+Fields shared by the selection show their value; differing fields show
+**Mixed**. Typing, dragging, stepping or choosing a new value applies that exact
+value to every selected keygroup immediately. Relative multi-edit is not used.
+One drag gesture is one Undo step, and structural actions such as duplicate,
+delete, reorder, paste and spread are each one transaction.
 
-The visual controls remain present so the affected workflow can be diagnosed;
-their presence is not a guarantee that every selected keygroup will change.
+Numeric fields accept exact entry with Return, Escape cancels entry, Tab and
+Shift-Tab move between fields, and arrow keys increment. Hold Shift for fine
+dragging or Option for coarse changes. Copy/Paste can transfer either the whole
+primary keygroup or a named parameter group to every selected keygroup.
+
+Unsaved changes stay in memory until Save. Closing offers Save, Cancel and Close
+Without Saving, and a recovery journal can restore the exact program after an
+interrupted session.
+
+When PLAY950 opens the selected program in EDIT950, the footer identifies the
+live connection. Each completed in-memory transaction is sent only to that
+plug-in instance for audition; the IMG is still unchanged until Save. Syncing,
+Auditioned, Sync Error and PLAY Disconnected make the current state explicit.
 
 ## Import and export WAV files
 

@@ -187,7 +187,7 @@ struct GenuineImageRegressionRunner {
             let originalLoudness = editedProgram.keygroups[0].softLoudness
             editedProgram.keygroups[0].softLoudness =
                 originalLoudness >= 50 ? originalLoudness - 1 : originalLoudness + 1
-            editor.program = editedProgram
+            editor.replaceProgram(with: editedProgram)
             let intendedEditedData = try editedProgram.encoded()
             let overwriteResult = try await model.performP9Overwrite(editor)
             guard let overwriteBackupURL = overwriteResult.backupURL,
@@ -223,7 +223,7 @@ struct GenuineImageRegressionRunner {
             let originalFilter = secondEdit.keygroups[0].softFilter
             secondEdit.keygroups[0].softFilter =
                 originalFilter >= 99 ? originalFilter - 1 : originalFilter + 1
-            editor.program = secondEdit
+            editor.replaceProgram(with: secondEdit)
             model.overwriteVerificationMutator = { exportedData in
                 var corrupted = exportedData
                 if !corrupted.isEmpty {
@@ -249,7 +249,7 @@ struct GenuineImageRegressionRunner {
                     "A forced overwrite failure did not restore the complete IMG."
                 )
             }
-            editor.program = try P9Program(data: intendedEditedData)
+            editor.replaceProgram(with: try P9Program(data: intendedEditedData))
             programs = model.snapshot.files.filter {
                 $0.name.uppercased().hasSuffix(".P9")
             }
@@ -337,7 +337,7 @@ struct GenuineImageRegressionRunner {
                 noBackupProgram.keygroups[0].softFilter >= 99
                     ? noBackupProgram.keygroups[0].softFilter - 1
                     : noBackupProgram.keygroups[0].softFilter + 1
-            noBackupEditor.program = noBackupProgram
+            noBackupEditor.replaceProgram(with: noBackupProgram)
             let noBackupResult = try await model.performP9Overwrite(
                 noBackupEditor,
                 createBackup: false

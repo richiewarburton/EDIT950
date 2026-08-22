@@ -2740,6 +2740,191 @@ struct TestRunner {
             }
         }
 
+        test("P9 multi-duplicate inserts one ordered block after the selection") {
+            var source = makeP9Fixture(keygroupCount: 4)
+            for index in 0..<4 {
+                let base = P9Program.headerSize + index * P9Program.keygroupSize
+                source[base + 0x15] = UInt8(0x40 + index)
+            }
+            var program = try P9Program(data: source)
+            let duplicated = try program.duplicateKeygroups(at: [0, 2])
+            try expect(duplicated == 3..<5)
+            try expect(program.keygroups.count == 6)
+            try expect(program.keygroups.map(\.id) == Array(0..<6))
+            try expect(program.keygroups[3].lowKey == program.keygroups[0].lowKey)
+            try expect(program.keygroups[4].lowKey == program.keygroups[2].lowKey)
+            let encoded = try program.encoded()
+            let firstCopy = P9Program.headerSize + 3 * P9Program.keygroupSize
+            let secondCopy = P9Program.headerSize + 4 * P9Program.keygroupSize
+            try expect(encoded[firstCopy + 0x15] == 0x40)
+            try expect(encoded[secondCopy + 0x15] == 0x42)
+        }
+
+        test("P9 whole-keygroup and parameter-group paste are absolute and atomic") {
+            var source = makeP9Fixture(keygroupCount: 3)
+            let first = P9Program.headerSize
+            source[first + 0x2C] = 17
+            source[first + 0x42] = 23
+            source[first + 0x08] = 31
+            source[first + 0x13] = 0x04
+            var program = try P9Program(data: source)
+            let record = try program.keygroupRecords(at: [0])[0]
+
+            program.keygroups[1].softFilter = 90
+            program.keygroups[2].softFilter = 91
+            try program.applyParameterGroup(.filter, from: record, to: [1, 2])
+            try expect(program.keygroups[1].softFilter == 17)
+            try expect(program.keygroups[2].softFilter == 17)
+            try expect(program.keygroups[1].loudFilter == 23)
+            try expect(program.keygroups[2].keyFilter == 31)
+
+            try program.replaceKeygroups(at: [1, 2], with: record)
+            try expect(program.keygroups[1].output == .mono(5))
+            try expect(program.keygroups[2].output == .mono(5))
+            try expect(program.keygroups.map(\.id) == [0, 1, 2])
+
+            let unchanged = program
+            try expectThrows {
+                try program.applyParameterGroup(
+                    .output,
+                    from: Data(repeating: 0, count: 69),
+                    to: [0, 1]
+                )
+            }
+            try expect(program == unchanged)
+        }
+
+        test("P9 mixed selection values distinguish common and differing fields") {
+            var program = try P9Program(data: makeP9Fixture(keygroupCount: 3))
+            program.keygroups[0].softFilter = 44
+            program.keygroups[1].softFilter = 44
+            program.keygroups[2].softFilter = 61
+            let common = P9SelectionValues.mixedValue(
+                in: Array(program.keygroups.prefix(2)),
+                \.softFilter
+            )
+            let mixed = P9SelectionValues.mixedValue(
+                in: program.keygroups,
+                \.softFilter
+            )
+            try expect(common == .value(44))
+            try expect(mixed == .mixed)
+        }
+
+        test("P9 clipboard and recovery journals are versioned and source-bound") {
+            let sourceData = makeP9Fixture(keygroupCount: 2)
+            var program = try P9Program(data: sourceData)
+            let record = try program.keygroupRecords(at: [0])[0]
+            let payload = P9ClipboardPayload(
+                kind: .parameterGroup(.envelopes),
+                sourceProgram: program.name,
+                record: record
+            )
+            let encodedPayload = try JSONEncoder().encode(payload)
+            let decodedPayload = try JSONDecoder().decode(
+                P9ClipboardPayload.self,
+                from: encodedPayload
+            )
+            let validatedPayload = try decodedPayload.validated()
+            try expect(validatedPayload == payload)
+
+            program.keygroups[0].envelope.release = 73
+            let workingData = try program.encoded()
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("edit950-recovery-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let snapshot = P9RecoverySnapshot(
+                sourceIdentity: "fixture|BREAKS.P9",
+                baselineData: sourceData,
+                workingData: workingData
+            )
+            try P9RecoveryJournal.write(snapshot, directory: directory)
+            let restored = try P9RecoveryJournal.read(
+                sourceIdentity: "fixture|BREAKS.P9",
+                baselineData: sourceData,
+                directory: directory
+            )
+            try expect(restored?.workingData == workingData)
+            try expectThrows {
+                _ = try snapshot.validated(
+                    sourceIdentity: "fixture|OTHER.P9",
+                    baselineData: sourceData
+                )
+            }
+            try P9RecoveryJournal.remove(
+                sourceIdentity: "fixture|BREAKS.P9",
+                directory: directory
+            )
+            let removedSnapshot = try P9RecoveryJournal.read(
+                sourceIdentity: "fixture|BREAKS.P9",
+                baselineData: sourceData,
+                directory: directory
+            )
+            try expect(removedSnapshot == nil)
+        }
+
+        test("PLAY950 live edit requests are versioned, fresh and P9-validated") {
+            let now = Date(timeIntervalSince1970: 1_800_000_000)
+            let request = P9LiveEditSessionRequest(
+                protocolVersion: P9LiveEditSessionRequest.currentVersion,
+                instanceID: UUID().uuidString,
+                imagePath: "/tmp/LIVE.IMG",
+                programFilename: "BREAKS.P9",
+                programData: makeP9Fixture(keygroupCount: 2),
+                baselineProgramData: makeP9Fixture(keygroupCount: 2),
+                revision: 17,
+                createdAt: now
+            )
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("edit950-live-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let requestURL = directory.appendingPathComponent("request.edit950session")
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .millisecondsSince1970
+            try encoder.encode(request).write(to: requestURL, options: .atomic)
+            let decoded = try P9LiveEditSessionRequest.read(
+                from: requestURL,
+                now: now
+            )
+            try expect(decoded == request)
+            try expectThrows {
+                _ = try request.validated(
+                    now: now.addingTimeInterval(301)
+                )
+            }
+            let malformed = P9LiveEditSessionRequest(
+                protocolVersion: P9LiveEditSessionRequest.currentVersion,
+                instanceID: UUID().uuidString,
+                imagePath: "/tmp/LIVE.IMG",
+                programFilename: "BREAKS.P9",
+                programData: Data(repeating: 0, count: 12),
+                baselineProgramData: makeP9Fixture(keygroupCount: 2),
+                revision: 18,
+                createdAt: now
+            )
+            try expectThrows { _ = try malformed.validated(now: now) }
+        }
+
+        test("P9 ninety-nine-keygroup absolute edit and serialization stay under 100 ms") {
+            var program = try P9Program(data: makeP9Fixture(keygroupCount: 99))
+            var edits = P9BulkEdits()
+            edits.softFilter = P9BulkNumberEdit(
+                enabled: true,
+                mode: .set,
+                value: 37
+            )
+            let start = CFAbsoluteTimeGetCurrent()
+            program.apply(edits, to: Set(program.keygroups.indices))
+            _ = try program.encoded()
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            try expect(elapsed < 0.1)
+            try expect(program.keygroups.allSatisfy { $0.softFilter == 37 })
+        }
+
         test("P9 keygroups reorder complete records and preserve selection mapping") {
             var source = makeP9Fixture(keygroupCount: 4)
             for index in 0..<4 {
@@ -2826,6 +3011,30 @@ struct TestRunner {
                     verticalTranslation: -20,
                     range: 0...99
                 ) == 99
+            )
+            try expect(
+                P9NumericInput.draggedValue(
+                    from: 20,
+                    verticalTranslation: -8,
+                    range: 0...99,
+                    pointsPerStep: 8
+                ) == 21
+            )
+            try expect(
+                P9NumericInput.draggedValue(
+                    from: 20,
+                    verticalTranslation: -2,
+                    range: 0...99,
+                    stepMultiplier: 10
+                ) == 30
+            )
+            try expect(
+                P9NumericInput.incrementedValue(
+                    from: 20,
+                    direction: 1,
+                    range: 0...99,
+                    coarse: true
+                ) == 30
             )
 
             let source = makeP9Fixture(keygroupCount: 40)

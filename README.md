@@ -30,32 +30,23 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.47 (build 68)**. Requires macOS 14 or later.
+Current source version: **1.8.48 (build 69)**. Requires macOS 14 or later.
 
-### What is new in 1.8.47
+### What is new in 1.8.48
 
-- Audition a chosen P9 from the main IMG browser using external MIDI or the
-  computer keyboard, independently of ordinary table selection, with visible
-  note activity and a yellow spot on the triggered S9 row.
-- Play every prepared S9 from its row icon or the Space bar, retain currently
-  playing audio during bandwidth conversion, and recover the audition engine
-  after an interruption.
-- Associate IMG, P9 and S9 files from Settings, close an IMG explicitly, and
-  see its filename, path, access mode and P9/S9 counts in the header.
-- Use the reorganized audition header, direct GitHub user-manual link and manual
-  GitHub release check. Companion-app handoffs now belong to the loaded IMG's
-  inspector.
-- Use one **Save P9 As…** action for a standalone or renamed in-IMG copy, and
-  deliberately duplicate or overwrite an unchanged program with the existing
-  verification safeguards.
+- Select any combination of P9 keygroups and edit shared or **Mixed** values
+  directly. Exact typed, dragged, stepped and chosen values apply immediately
+  to the complete selection.
+- Undo or redo whole gestures and structural operations, duplicate an ordered
+  keygroup block, and copy whole keygroups or named parameter groups.
+- Keep edits in memory until explicit Save, recover interrupted work from a
+  source-bound journal, and write IMG-backed P9s through a byte-verified staging
+  image followed by atomic replacement.
+- Open the exact P9 selected in PLAY950 and audition validated in-memory edits
+  in that private plug-in instance without writing the IMG or rebuilding its
+  linked sample data.
 
-> **Known issue:** bulk P9 edits are not reliable when more than one keygroup is
-> selected. This affects every field and every way of making a multi-keygroup
-> selection, not only Release or Select All. Edit one keygroup at a time in this
-> release. Progress is tracked in
-> [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
-
-See [the complete 1.8.47 release notes](ReleaseDocs/RELEASE_NOTES_1.8.47.md)
+See [the complete 1.8.48 release notes](ReleaseDocs/RELEASE_NOTES_1.8.48.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
@@ -162,9 +153,13 @@ and optional input-only MIDI triggering.*
 - Open a P9 from an IMG or directly from Finder.
 - See its keygroups, Soft/Loud layers, key and velocity ranges, tuning, filter,
   amplitude/VCF envelopes, MIDI channel and output routing.
-- Edit one keygroup at a time. The editor exposes multi-keygroup Set/Adjust
-  controls, but their application is a known issue in this release and should
-  not be relied upon for more than one selected keygroup.
+- Select keygroups independently with click, Command-click, Shift-click or
+  Command-A. Mixed fields say **Mixed**; entering, dragging or choosing a value
+  applies that absolute value immediately to the complete selection.
+- Undo and redo complete edit transactions, duplicate selected keygroups as one
+  ordered block, and copy whole keygroups or parameter groups between programs.
+- Type exact numeric values, drag for continuous changes, use arrow keys, or
+  hold Shift for finer dragging and Option for coarse changes.
 - Spread samples chromatically with tuning compensation.
 - Rename an S9 and update every matching Soft and Loud reference.
 - Copy keygroups and their linked samples between writable IMG files.
@@ -173,6 +168,11 @@ and optional input-only MIDI triggering.*
 - Use one **Save P9 As…** action to create a standalone P9 or a verified renamed
   copy in the current IMG; unchanged programs can also be duplicated or
   deliberately overwritten.
+- Use explicit Save/Command-S for standalone P9s and IMG programs. IMG writes
+  are prepared and byte-verified in a staging image before atomic replacement;
+  unsaved in-memory edits are journalled for recovery.
+- When opened from PLAY950, hear the current in-memory edit in that exact plug-in
+  instance and see its syncing, auditioned or disconnected state in the editor.
 - Choose a main-screen P9 from the dedicated audition dropdown, then play it
   from external MIDI or the Ableton-style computer keyboard. The Program editor
   auditions its open program. Sounding Soft S9 rows are
@@ -271,9 +271,6 @@ built-in safety path.
 
 ## Current limitations
 
-- Bulk P9 edits are not reliable when more than one keygroup is selected. Edit
-  one keygroup at a time and follow
-  [issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
 - Physical disks and drives are not supported directly.
 - HFE, SCP and raw flux capture formats require conversion to a supported image.
 - Ableton import supports one distinct sample zone per occupied Sampler or

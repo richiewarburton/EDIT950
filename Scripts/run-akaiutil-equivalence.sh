@@ -48,6 +48,7 @@ cmp "$ROOT/arm64/manifest.txt" "$ROOT/upstream/manifest.txt"
 
 SDK_PATH=$(xcrun --show-sdk-path)
 swiftc -sdk "$SDK_PATH" -target arm64-apple-macosx14.0 -parse-as-library \
+  "$PROJECT_DIR/Sources/EDIT950/P9EditingSession.swift" \
   "$PROJECT_DIR/Sources/EDIT950/P9Program.swift" \
   "$PROJECT_DIR/Tests/NativeP9LoadRunner.swift" \
   -o "$ROOT/NativeP9LoadRunner"

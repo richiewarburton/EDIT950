@@ -34,7 +34,7 @@ struct P9EditorVisualRunner {
                !document.program.keygroups.isEmpty {
                 var program = document.program
                 program.keygroups[0].softLoudness += 1
-                document.program = program
+                document.replaceProgram(with: program)
             }
             NSApplication.shared.setActivationPolicy(.regular)
             let appearanceName: NSAppearance.Name =
@@ -168,40 +168,19 @@ struct P9EditorVisualRunner {
             throw P9EditorVisualFailure.bulkReleaseControls
         }
 
-        let valueField = root.descendant(
-                accessibilityIdentifier: "p9-bulk-amplitude-release-value"
-              ) as? NSTextField
-        let operation = root.descendant(
-            accessibilityIdentifier: "p9-bulk-amplitude-release-operation"
-        ) as? NSPopUpButton
-        guard let operation else {
+        guard let valueField = root.descendant(
+            accessibilityIdentifier: "p9-mixed-amplitude-release"
+        ) as? NSTextField else {
             throw P9EditorVisualFailure.bulkReleaseControls
         }
-        guard operation.item(withTitle: "Set") != nil else {
-            throw P9EditorVisualFailure.bulkReleaseControls
-        }
-        operation.selectItem(withTitle: "Set")
-        operation.sendAction(operation.action, to: operation.target)
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
-        guard valueField?.isEnabled == true else {
+        guard valueField.isEnabled else {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
-        guard let apply = NSEvent.keyEvent(
-            with: .keyDown,
-            location: .zero,
-            modifierFlags: [],
-            timestamp: ProcessInfo.processInfo.systemUptime,
-            windowNumber: window.windowNumber,
-            context: nil,
-            characters: "\r",
-            charactersIgnoringModifiers: "\r",
-            isARepeat: false,
-            keyCode: 36
-        ) else {
+        guard window.makeFirstResponder(valueField) else {
             throw P9EditorVisualFailure.bulkReleaseApplyDisabled
         }
+        valueField.stringValue = "0"
         window.makeFirstResponder(nil)
-        window.sendEvent(apply)
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
         guard document.hasChanges,
               document.program.keygroups.allSatisfy({ $0.envelope.release == 0 })

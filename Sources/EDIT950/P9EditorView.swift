@@ -115,12 +115,23 @@ final class P9EditorDocument: ObservableObject, Identifiable {
                 return "New program for \(imageURL.lastPathComponent); create it in the IMG when ready"
             }
         }
+
+        var recoveryIdentity: String {
+            switch self {
+            case .local(let url):
+                return "local|\(url.standardizedFileURL.resolvingSymlinksInPath().path)"
+            case .image(let filename, let imageURL, let volumePath):
+                return "image|\(imageURL.standardizedFileURL.resolvingSymlinksInPath().path)|\(volumePath)|\(filename.uppercased())"
+            case .newImageProgram(let filename, let imageURL, let volumePath):
+                return "new-image-program|\(imageURL.standardizedFileURL.resolvingSymlinksInPath().path)|\(volumePath)|\(filename.uppercased())"
+            }
+        }
     }
 
     let id = UUID()
     @Published private(set) var source: Source
     @Published private(set) var originalData: Data
-    @Published var program: P9Program
+    @Published private(set) var program: P9Program
     @Published var lastSavedURL: URL?
     @Published private(set) var lastSavedData: Data?
     @Published private(set) var pendingKeygroupPaste: P9PendingKeygroupPaste?
@@ -136,11 +147,43 @@ final class P9EditorDocument: ObservableObject, Identifiable {
     @Published var drumRackImportMessage: String?
     @Published var drumRackImportErrorMessage: String?
     @Published private(set) var editorRevision = 0
+    @Published private(set) var recoverySnapshot: P9RecoverySnapshot?
+    @Published private(set) var auditionSyncState: P9AuditionSyncState = .disconnected
+    weak var undoManager: UndoManager?
+    var liveAuditionClient: P9LiveAuditionClient? {
+        didSet {
+            oldValue?.stop()
+            guard let liveAuditionClient else {
+                auditionSyncState = .disconnected
+                return
+            }
+            liveAuditionClient.onStateChange = { [weak self] state in
+                self?.auditionSyncState = state
+            }
+            liveAuditionClient.start()
+            publishAuditionSnapshot()
+        }
+    }
+    private let recoveryDirectory: URL?
+    private var recoveryWriteTask: Task<Void, Never>?
+    private var ownsContinuousUndoGroup = false
+    private var continuousUndoActionName: String?
 
-    init(data: Data, source: Source) throws {
-        originalData = data
+    init(
+        data: Data,
+        source: Source,
+        baselineData: Data? = nil,
+        recoveryDirectory: URL? = nil
+    ) throws {
+        originalData = baselineData ?? data
         program = try P9Program(data: data)
         self.source = source
+        self.recoveryDirectory = recoveryDirectory
+        recoverySnapshot = try? P9RecoveryJournal.read(
+            sourceIdentity: source.recoveryIdentity,
+            baselineData: originalData,
+            directory: recoveryDirectory
+        )
     }
 
     var hasChanges: Bool {
@@ -161,13 +204,101 @@ final class P9EditorDocument: ObservableObject, Identifiable {
 
     func replaceProgram(
         with updatedProgram: P9Program,
-        refreshEditor: Bool = false
+        refreshEditor: Bool = false,
+        actionName: String = "Edit Program",
+        registerUndo: Bool = true
     ) {
+        guard updatedProgram != program else { return }
+        let previousProgram = program
+        let structureChanged =
+            updatedProgram.keygroups.count != program.keygroups.count
+        installProgram(
+            updatedProgram,
+            refreshEditor: refreshEditor || structureChanged
+        )
+        if registerUndo {
+            registerUndoSnapshot(previousProgram, actionName: actionName)
+        }
+        scheduleRecoveryWrite()
+        publishAuditionSnapshot()
+    }
+
+    func performEdit(
+        actionName: String,
+        refreshEditor: Bool = false,
+        _ mutation: (inout P9Program) throws -> Void
+    ) rethrows {
+        var updatedProgram = program
+        try mutation(&updatedProgram)
+        replaceProgram(
+            with: updatedProgram,
+            refreshEditor: refreshEditor,
+            actionName: actionName
+        )
+    }
+
+    func beginContinuousEdit(actionName: String) {
+        guard let undoManager,
+              undoManager.groupingLevel == 0,
+              !ownsContinuousUndoGroup
+        else { return }
+        undoManager.beginUndoGrouping()
+        ownsContinuousUndoGroup = true
+        continuousUndoActionName = actionName
+    }
+
+    func endContinuousEdit() {
+        guard ownsContinuousUndoGroup, let undoManager else { return }
+        if let continuousUndoActionName {
+            undoManager.setActionName(continuousUndoActionName)
+        }
+        undoManager.endUndoGrouping()
+        ownsContinuousUndoGroup = false
+        continuousUndoActionName = nil
+    }
+
+    func restoreRecoverySnapshot() throws {
+        guard let recoverySnapshot else { return }
+        let recovered = try P9Program(data: recoverySnapshot.workingData)
+        replaceProgram(
+            with: recovered,
+            refreshEditor: true,
+            actionName: "Restore Recovered Edits"
+        )
+        self.recoverySnapshot = nil
+    }
+
+    func discardRecoverySnapshot() {
+        recoverySnapshot = nil
+        removeRecoveryJournal()
+    }
+
+    func discardUnsavedChanges() {
+        removeRecoveryJournal()
+    }
+
+    private func installProgram(_ updatedProgram: P9Program, refreshEditor: Bool) {
         let structureChanged =
             updatedProgram.keygroups.count != program.keygroups.count
         program = updatedProgram
         if refreshEditor || structureChanged {
             editorRevision &+= 1
+        }
+    }
+
+    private func registerUndoSnapshot(
+        _ previousProgram: P9Program,
+        actionName: String
+    ) {
+        undoManager?.registerSuiteUndo(
+            withTarget: self,
+            actionName: actionName
+        ) { target in
+            let inverse = target.program
+            target.installProgram(previousProgram, refreshEditor: true)
+            target.registerUndoSnapshot(inverse, actionName: actionName)
+            target.scheduleRecoveryWrite()
+            target.publishAuditionSnapshot()
         }
     }
 
@@ -197,14 +328,17 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         }
         replaceProgram(
             with: try P9Program(data: data),
-            refreshEditor: true
+            refreshEditor: true,
+            registerUndo: false
         )
         originalData = data
         lastSavedData = nil
+        removeRecoveryJournal()
         overwriteMessage = "\(source.filename) overwritten and byte-verified."
     }
 
     func markCreatedInImage(with data: Data) throws {
+        let recoveryIdentity = source.recoveryIdentity
         guard case .newImageProgram(
             let filename,
             let imageURL,
@@ -216,7 +350,8 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         }
         replaceProgram(
             with: try P9Program(data: data),
-            refreshEditor: true
+            refreshEditor: true,
+            registerUndo: false
         )
         originalData = data
         lastSavedData = nil
@@ -225,6 +360,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
             imageURL: imageURL,
             volumePath: volumePath
         )
+        removeRecoveryJournal(sourceIdentity: recoveryIdentity)
         createMessage = "\(filename) created and byte-verified in the IMG."
     }
 
@@ -234,6 +370,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         volumePath: String,
         data: Data
     ) throws {
+        let recoveryIdentity = source.recoveryIdentity
         guard source.isExistingImageProgram else {
             throw AppError.verificationFailed(
                 "Save As New in IMG is available only for a P9 opened from an IMG."
@@ -241,7 +378,8 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         }
         replaceProgram(
             with: try P9Program(data: data),
-            refreshEditor: true
+            refreshEditor: true,
+            registerUndo: false
         )
         originalData = data
         lastSavedData = nil
@@ -250,6 +388,7 @@ final class P9EditorDocument: ObservableObject, Identifiable {
             imageURL: imageURL,
             volumePath: volumePath
         )
+        removeRecoveryJournal(sourceIdentity: recoveryIdentity)
         createMessage = "\(filename) saved as new and byte-verified in the IMG."
     }
 
@@ -284,7 +423,10 @@ final class P9EditorDocument: ObservableObject, Identifiable {
             records: pendingKeygroupPaste.records,
             sampleNameMapping: pendingKeygroupPaste.sampleNameMapping
         )
-        replaceProgram(with: updatedProgram)
+        replaceProgram(
+            with: updatedProgram,
+            actionName: "Paste Keygroups"
+        )
         self.pendingKeygroupPaste = nil
         return firstIndex..<updatedProgram.keygroups.count
     }
@@ -311,7 +453,67 @@ final class P9EditorDocument: ObservableObject, Identifiable {
         try data.write(to: destination, options: .atomic)
         lastSavedURL = destination
         lastSavedData = data
+        removeRecoveryJournal()
         return destination
+    }
+
+    func saveLocalSource() throws -> URL {
+        guard case .local(let sourceURL) = source else {
+            throw AppError.verificationFailed(
+                "Direct Save is available only for a standalone P9 source."
+            )
+        }
+        let currentSource = try Data(contentsOf: sourceURL)
+        let expectedSource = originalData
+        guard currentSource == expectedSource else {
+            throw P9EditingError.sourceChangedExternally
+        }
+        let data = try program.encoded()
+        try data.write(to: sourceURL, options: .atomic)
+        originalData = data
+        lastSavedData = data
+        lastSavedURL = sourceURL
+        removeRecoveryJournal()
+        return sourceURL
+    }
+
+    private func scheduleRecoveryWrite() {
+        recoveryWriteTask?.cancel()
+        guard hasUnwrittenChanges,
+              let workingData = try? program.encoded()
+        else {
+            removeRecoveryJournal()
+            return
+        }
+        let snapshot = P9RecoverySnapshot(
+            sourceIdentity: source.recoveryIdentity,
+            baselineData: originalData,
+            workingData: workingData
+        )
+        let directory = recoveryDirectory
+        // Inherit the document's MainActor so an explicit discard cannot race a
+        // detached journal write that has already finished its debounce.
+        recoveryWriteTask = Task(priority: .utility) {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            try? P9RecoveryJournal.write(snapshot, directory: directory)
+        }
+    }
+
+    private func removeRecoveryJournal(sourceIdentity: String? = nil) {
+        recoveryWriteTask?.cancel()
+        recoveryWriteTask = nil
+        let identity = sourceIdentity ?? source.recoveryIdentity
+        let directory = recoveryDirectory
+        try? P9RecoveryJournal.remove(
+            sourceIdentity: identity,
+            directory: directory
+        )
+    }
+
+    private func publishAuditionSnapshot() {
+        guard let data = try? program.encoded() else { return }
+        liveAuditionClient?.publish(programData: data)
     }
 }
 
@@ -343,10 +545,7 @@ struct P9EditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var suitePreferences: SuitePreferences
     @State private var selection: Set<Int>
-    @State private var bulkEdits = P9BulkEdits()
-    @State private var pendingSelectionAfterBulkEdits: Set<Int>?
-    @State private var showBulkSelectionConfirmation = false
-    @State private var isRestoringSelection = false
+    @State private var primaryKeygroupIndex: Int?
     @State private var loudSampleExpanded = false
     @State private var showSpreadSheet = false
     @State private var showOverwriteConfirmation = false
@@ -354,6 +553,7 @@ struct P9EditorSheet: View {
     @State private var showSaveAsNewInImagePrompt = false
     @State private var createBackupBeforeOverwrite = true
     @State private var showCloseConfirmation = false
+    @State private var showRecoveryConfirmation = false
     @State private var spreadSettings = P9SpreadSettings()
     @State private var message: String?
     @State private var errorMessage: String?
@@ -394,6 +594,9 @@ struct P9EditorSheet: View {
         let first = document.program.keygroups.first?.id
         let startingSelection = initialSelection ?? first.map { Set([$0]) } ?? []
         _selection = State(initialValue: startingSelection)
+        _primaryKeygroupIndex = State(
+            initialValue: startingSelection.sorted().first
+        )
         _showSpreadSheet = State(
             initialValue: showSpreadInitially && startingSelection.count > 1
         )
@@ -446,26 +649,18 @@ struct P9EditorSheet: View {
         }
         .frame(width: Self.baseSize.width, height: Self.baseSize.height)
         .background(Color.suiteBackground)
-        .onChange(of: selection) { oldSelection, newSelection in
-            if isRestoringSelection {
-                isRestoringSelection = false
-                return
+        .onChange(of: selection) { _, newSelection in
+            if let primaryKeygroupIndex,
+               !newSelection.contains(primaryKeygroupIndex) {
+                self.primaryKeygroupIndex = newSelection.sorted().first
+            } else if primaryKeygroupIndex == nil {
+                primaryKeygroupIndex = newSelection.sorted().first
             }
-            if oldSelection.count > 1, bulkEdits.hasChanges {
-                pendingSelectionAfterBulkEdits = newSelection
-                isRestoringSelection = true
-                selection = oldSelection
-                showBulkSelectionConfirmation = true
-                return
-            }
-            bulkEdits = P9BulkEdits()
             message = nil
-        }
-        .onChange(of: document.editorRevision) { _, _ in
-            bulkEdits = P9BulkEdits()
         }
         .onAppear {
             audition.activateEditor(preparedAuditionProgram)
+            showRecoveryConfirmation = document.recoverySnapshot != nil
         }
         .onDisappear { audition.deactivateEditor() }
         .onKeyPress("a", phases: .down) { press in
@@ -476,6 +671,14 @@ struct P9EditorSheet: View {
             return .handled
         }
         .onChange(of: document.program) { _, _ in
+            let validSelection = selection.filter {
+                document.program.keygroups.indices.contains($0)
+            }
+            if validSelection != selection {
+                selection = validSelection.isEmpty
+                    ? document.program.keygroups.indices.first.map { Set([$0]) } ?? []
+                    : validSelection
+            }
             audition.updateEditor(preparedAuditionProgram)
         }
         .alert("P9 Editor", isPresented: Binding(
@@ -510,38 +713,39 @@ struct P9EditorSheet: View {
             )
         }
         .alert(
-            "Apply Bulk Edits?",
-            isPresented: $showBulkSelectionConfirmation
+            "Recover Unsaved Program Edits?",
+            isPresented: $showRecoveryConfirmation
         ) {
-            Button("Apply to \(selection.count) Keygroups") {
-                showBulkSelectionConfirmation = false
-                applyBulkEdits(to: selection, announce: false)
-                completePendingSelectionChange()
+            Button("Restore") {
+                do {
+                    try document.restoreRecoverySnapshot()
+                    message = "Recovered unsaved edits."
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
             }
-            Button("Discard Edits", role: .destructive) {
-                showBulkSelectionConfirmation = false
-                bulkEdits = P9BulkEdits()
-                completePendingSelectionChange()
-            }
-            Button("Cancel", role: .cancel) {
-                showBulkSelectionConfirmation = false
-                pendingSelectionAfterBulkEdits = nil
+            Button("Discard", role: .destructive) {
+                document.discardRecoverySnapshot()
             }
         } message: {
             Text(
-                "The bulk-edit controls contain changes that have not been applied "
-                    + "to the currently selected keygroups."
+                "EDIT950 found a recovery journal for this exact program source. The source IMG or P9 has not been changed."
             )
         }
         .alert(
             "Close Program Without Saving?",
             isPresented: $showCloseConfirmation
         ) {
+            Button("Save") {
+                showCloseConfirmation = false
+                saveDocument()
+            }
             Button("Cancel", role: .cancel) {
                 showCloseConfirmation = false
             }
             Button("Close Without Saving", role: .destructive) {
                 showCloseConfirmation = false
+                document.discardUnsavedChanges()
                 dismiss()
             }
         } message: {
@@ -660,6 +864,40 @@ struct P9EditorSheet: View {
             audition.indicatedSampleIDs.contains(sample.fileID)
                 ? sample.normalizedName : nil
         }.sorted()
+    }
+
+    private var selectedKeygroups: [P9Keygroup] {
+        selection.sorted().compactMap { index in
+            document.program.keygroups.indices.contains(index)
+                ? document.program.keygroups[index]
+                : nil
+        }
+    }
+
+    private var primaryKeygroup: P9Keygroup? {
+        guard let primaryKeygroupIndex,
+              selection.contains(primaryKeygroupIndex),
+              document.program.keygroups.indices.contains(primaryKeygroupIndex)
+        else { return selectedKeygroups.first }
+        return document.program.keygroups[primaryKeygroupIndex]
+    }
+
+    private var auditionSyncSystemImage: String {
+        switch document.auditionSyncState {
+        case .disconnected: return "bolt.slash"
+        case .syncing: return "arrow.triangle.2.circlepath"
+        case .auditioned: return "waveform"
+        case .error: return "exclamationmark.triangle"
+        }
+    }
+
+    private var auditionSyncColor: Color {
+        switch document.auditionSyncState {
+        case .auditioned: return .suiteBlue
+        case .syncing: return .suiteYellow
+        case .disconnected: return .suiteUnit
+        case .error: return .suiteRed
+        }
     }
 
     private var keygroupList: some View {
@@ -784,11 +1022,12 @@ struct P9EditorSheet: View {
                 .controlSize(.small)
                 .accessibilityLabel("Add Keygroup")
                 .disabled(
-                    document.program.keygroups.count >= 99
+                    document.program.keygroups.count
+                            + max(1, selection.count) > 99
                         || document.pendingKeygroupPaste != nil
                         || document.isPreparingKeygroupPaste
                 )
-                .help("Add a keygroup by duplicating the selected keygroup")
+                .help("Duplicate every selected keygroup as one ordered block")
                 Button(role: .destructive) {
                     deleteSelectedKeygroups()
                 } label: {
@@ -813,9 +1052,12 @@ struct P9EditorSheet: View {
                     .keyboardShortcut("a", modifiers: .command)
                     Button("Keep First Selected Only") {
                         if let first =
-                            selection.sorted().first
+                            primaryKeygroupIndex
+                            ?? selection.sorted().first
                             ?? document.program.keygroups.first?.id {
                             selection = [first]
+                            primaryKeygroupIndex = first
+                            keygroupSelectionAnchor = first
                         }
                     }
                 }
@@ -829,13 +1071,17 @@ struct P9EditorSheet: View {
         if selection.count == 1, let index = selection.first,
            document.program.keygroups.indices.contains(index) {
             IndividualP9KeygroupEditor(
+                document: document,
                 keygroup: individualKeygroupBinding(index),
                 loudSampleExpanded: $loudSampleExpanded,
                 availableSampleNames: availableSampleNames
             )
         } else if !selection.isEmpty {
-            BulkP9KeygroupEditor(
-                edits: $bulkEdits,
+            MixedP9KeygroupEditor(
+                document: document,
+                selection: selection,
+                keygroups: selectedKeygroups,
+                primaryKeygroup: primaryKeygroup,
                 loudSampleExpanded: $loudSampleExpanded,
                 availableSampleNames: availableSampleNames
             )
@@ -860,6 +1106,14 @@ struct P9EditorSheet: View {
             )
             .font(SuiteFont.regular(10))
             .foregroundStyle(Color.suiteUnit)
+            if document.liveAuditionClient != nil {
+                Label(
+                    document.auditionSyncState.title,
+                    systemImage: auditionSyncSystemImage
+                )
+                .font(SuiteFont.medium(10))
+                .foregroundStyle(auditionSyncColor)
+            }
             if document.isPreparingKeygroupPaste {
                 ProgressView()
                     .controlSize(.small)
@@ -946,7 +1200,6 @@ struct P9EditorSheet: View {
             }
             .disabled(
                 selection.count < 2
-                    || bulkEdits.hasChanges
                     || document.pendingKeygroupPaste != nil
                     || document.isPreparingKeygroupPaste
                     || document.isOverwritingInImage
@@ -956,10 +1209,28 @@ struct P9EditorSheet: View {
             .help(
                 document.pendingKeygroupPaste != nil
                     ? "Apply the pasted keygroups before spreading"
-                    : bulkEdits.hasChanges
-                    ? "Apply the current bulk edits before spreading keygroups"
                     : "Map selected keygroups chromatically across single notes"
             )
+            Menu {
+                Button("Copy Whole Keygroup") {
+                    copyPrimaryKeygroup(kind: .wholeKeygroup)
+                }
+                Menu("Copy Parameter Group") {
+                    ForEach(P9ParameterGroup.allCases) { group in
+                        Button(group.title) {
+                            copyPrimaryKeygroup(kind: .parameterGroup(group))
+                        }
+                    }
+                }
+                Divider()
+                Button("Paste to Selected Keygroups") {
+                    pasteKeygroupClipboard()
+                }
+                .disabled(keygroupClipboardPayload == nil)
+            } label: {
+                Label("Copy / Paste", systemImage: "doc.on.clipboard")
+            }
+            .disabled(selection.isEmpty)
             Menu {
                 Button("Copy Selected Keygroups and Samples") {
                     copyCurrentKeygroups()
@@ -1011,13 +1282,18 @@ struct P9EditorSheet: View {
                         || document.isCreatingInImage
                         || document.isImportingDrumRack
                 )
-            if document.pendingKeygroupPaste != nil || selection.count > 1 {
+            if document.pendingKeygroupPaste != nil {
                 Button(applyButtonTitle) { applyCurrentEdits() }
                     .keyboardShortcut(.defaultAction)
                     .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
                     .accessibilityIdentifier("p9-bulk-apply-button")
                     .disabled(!canApply)
             }
+            Button("Save") { saveDocument() }
+                .keyboardShortcut("s", modifiers: .command)
+                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                .disabled(!canSave)
+                .help("Write the current in-memory program explicitly")
             Button("Save P9 As…") { saveP9As() }
                 .buttonStyle(SuiteSecondaryButtonStyle())
                 .disabled(
@@ -1034,28 +1310,6 @@ struct P9EditorSheet: View {
                             ? "Create a new P9 in the current IMG or save one to the filesystem"
                             : "Save the program as a standalone P9 file"
                 )
-            if document.source.isNewImageProgram {
-                Button("Create in IMG…") {
-                    createInImage()
-                }
-                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
-                .disabled(!canCreateInImage)
-                .help(
-                    "Import this new program into its source IMG and verify every P9 byte"
-                )
-            }
-            if document.source.isExistingImageProgram {
-                Button("Overwrite in IMG…") {
-                    showOverwriteConfirmation = true
-                }
-                .buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
-                .disabled(!canOverwriteInImage)
-                .help(
-                    document.pendingKeygroupPaste != nil
-                        ? "Apply the pasted keygroups before overwriting"
-                        : "Create a verified IMG backup, replace this P9 and byte-verify it"
-                )
-            }
         }
         .padding(12)
     }
@@ -1066,7 +1320,10 @@ struct P9EditorSheet: View {
             set: { value in
                 var program = document.program
                 program.positionalCrossfade = value
-                document.replaceProgram(with: program)
+                document.replaceProgram(
+                    with: program,
+                    actionName: "Set Positional Crossfade"
+                )
             }
         )
     }
@@ -1082,7 +1339,10 @@ struct P9EditorSheet: View {
                 else { return }
                 var program = document.program
                 program.keygroups[index] = updatedKeygroup
-                document.replaceProgram(with: program)
+                document.replaceProgram(
+                    with: program,
+                    actionName: "Edit Keygroup"
+                )
             }
         )
     }
@@ -1097,7 +1357,7 @@ struct P9EditorSheet: View {
         if document.pendingKeygroupPaste != nil {
             return true
         }
-        return selection.count > 1 && bulkEdits.hasChanges
+        return false
     }
 
     private var canOverwriteInImage: Bool {
@@ -1123,12 +1383,23 @@ struct P9EditorSheet: View {
             && !document.isImportingDrumRack
     }
 
+    private var canSave: Bool {
+        guard document.pendingKeygroupPaste == nil,
+              !document.isPreparingKeygroupPaste,
+              !document.isOverwritingInImage,
+              !document.isCreatingInImage,
+              !document.isImportingDrumRack
+        else { return false }
+        switch document.source {
+        case .local: return true
+        case .image: return canOverwriteInImage
+        case .newImageProgram: return canCreateInImage
+        }
+    }
+
     private var applyButtonTitle: String {
         if let pending = document.pendingKeygroupPaste {
             return "Add \(pending.count) Pasted Keygroup\(pending.count == 1 ? "" : "s")"
-        }
-        if selection.count > 1 {
-            return "Apply to \(selection.count) Keygroups"
         }
         return "Apply"
     }
@@ -1136,11 +1407,10 @@ struct P9EditorSheet: View {
     private func applyCurrentEdits(announce: Bool = true) {
         NSApp.keyWindow?.makeFirstResponder(nil)
         if let pending = document.pendingKeygroupPaste {
-            applyBulkEdits(to: selection, announce: false)
             do {
                 if let appendedRange = try document.applyPendingKeygroupPaste() {
                     selection = Set(appendedRange)
-                    bulkEdits = P9BulkEdits()
+                    primaryKeygroupIndex = appendedRange.first
                 }
                 if announce {
                     message =
@@ -1154,29 +1424,14 @@ struct P9EditorSheet: View {
             }
             return
         }
-        applyBulkEdits(to: selection, announce: announce)
-    }
-
-    private func applyBulkEdits(to target: Set<Int>, announce: Bool) {
-        guard target.count > 1, bulkEdits.hasChanges else { return }
-        var program = document.program
-        program.apply(bulkEdits, to: target)
-        document.replaceProgram(with: program)
-        if announce {
-            message = "Applied changes to \(target.count) keygroups."
-        }
-        bulkEdits = P9BulkEdits()
-    }
-
-    private func completePendingSelectionChange() {
-        guard let target = pendingSelectionAfterBulkEdits else { return }
-        pendingSelectionAfterBulkEdits = nil
-        selection = target
     }
 
     private func selectAllKeygroups() {
         selection = Set(document.program.keygroups.indices)
-        keygroupSelectionAnchor = document.program.keygroups.indices.first
+        if primaryKeygroupIndex == nil {
+            primaryKeygroupIndex = document.program.keygroups.indices.first
+        }
+        keygroupSelectionAnchor = primaryKeygroupIndex
     }
 
     private func prepareSpread() {
@@ -1197,13 +1452,24 @@ struct P9EditorSheet: View {
         applyCurrentEdits(announce: false)
         do {
             var program = document.program
-            let newIndex = try program.appendKeygroup(
-                copying: selection.sorted().first
+            let duplicated: Range<Int>
+            if selection.isEmpty {
+                let newIndex = try program.appendKeygroup(copying: nil)
+                duplicated = newIndex..<(newIndex + 1)
+            } else {
+                duplicated = try program.duplicateKeygroups(at: selection)
+            }
+            document.replaceProgram(
+                with: program,
+                refreshEditor: true,
+                actionName: "Duplicate Keygroups"
             )
-            document.replaceProgram(with: program)
-            bulkEdits = P9BulkEdits()
-            selection = [newIndex]
-            message = "Added keygroup \(newIndex + 1)."
+            selection = Set(duplicated)
+            primaryKeygroupIndex = duplicated.first
+            keygroupSelectionAnchor = duplicated.first
+            message = duplicated.count == 1
+                ? "Duplicated the selected keygroup."
+                : "Duplicated \(duplicated.count) selected keygroups."
         } catch {
             errorMessage =
                 (error as? LocalizedError)?.errorDescription
@@ -1218,9 +1484,15 @@ struct P9EditorSheet: View {
         do {
             var program = document.program
             try program.deleteKeygroups(at: selection)
-            document.replaceProgram(with: program)
-            bulkEdits = P9BulkEdits()
-            selection = [min(firstDeleted, program.keygroups.count - 1)]
+            document.replaceProgram(
+                with: program,
+                refreshEditor: true,
+                actionName: "Delete Keygroups"
+            )
+            let next = min(firstDeleted, program.keygroups.count - 1)
+            selection = [next]
+            primaryKeygroupIndex = next
+            keygroupSelectionAnchor = next
             message =
                 deletedCount == 1
                     ? "Deleted the selected keygroup."
@@ -1233,8 +1505,7 @@ struct P9EditorSheet: View {
     }
 
     private var keygroupReorderingDisabled: Bool {
-        bulkEdits.hasChanges
-            || document.pendingKeygroupPaste != nil
+        document.pendingKeygroupPaste != nil
             || document.isPreparingKeygroupPaste
             || document.isOverwritingInImage
             || document.isCreatingInImage
@@ -1249,17 +1520,26 @@ struct P9EditorSheet: View {
         if modifiers.contains(.command) {
             if selection.contains(index) {
                 selection.remove(index)
+                if primaryKeygroupIndex == index {
+                    primaryKeygroupIndex = selection.sorted().first
+                }
             } else {
+                if selection.isEmpty { primaryKeygroupIndex = index }
                 selection.insert(index)
             }
-            keygroupSelectionAnchor = index
+            if primaryKeygroupIndex == nil {
+                primaryKeygroupIndex = selection.sorted().first
+            }
+            keygroupSelectionAnchor = primaryKeygroupIndex
         } else if modifiers.contains(.shift) {
             let anchor = keygroupSelectionAnchor
+                ?? primaryKeygroupIndex
                 ?? selection.sorted().first
                 ?? index
             selection = Set(min(anchor, index)...max(anchor, index))
         } else {
             selection = [index]
+            primaryKeygroupIndex = index
             keygroupSelectionAnchor = index
         }
     }
@@ -1268,6 +1548,7 @@ struct P9EditorSheet: View {
         guard !keygroupReorderingDisabled else { return NSItemProvider() }
         if !selection.contains(index) {
             selection = [index]
+            primaryKeygroupIndex = index
             keygroupSelectionAnchor = index
         }
         draggedKeygroupOffsets = IndexSet(selection)
@@ -1280,9 +1561,7 @@ struct P9EditorSheet: View {
 
     private func moveKeygroups(from offsets: IndexSet, to destination: Int) {
         guard !keygroupReorderingDisabled else {
-            errorMessage = bulkEdits.hasChanges
-                ? "Apply or discard the current bulk edits before reordering keygroups."
-                : "Finish the current keygroup operation before reordering."
+            errorMessage = "Finish the current keygroup operation before reordering."
             return
         }
         applyCurrentEdits(announce: false)
@@ -1294,9 +1573,15 @@ struct P9EditorSheet: View {
             )
             let movedCount = offsets.count
             let updatedSelection = Set(selection.compactMap { indexMapping[$0] })
-            document.replaceProgram(with: program, refreshEditor: true)
+            let updatedPrimary = primaryKeygroupIndex.flatMap { indexMapping[$0] }
+            document.replaceProgram(
+                with: program,
+                refreshEditor: true,
+                actionName: "Reorder Keygroups"
+            )
             selection = updatedSelection
-            bulkEdits = P9BulkEdits()
+            primaryKeygroupIndex = updatedPrimary ?? updatedSelection.sorted().first
+            keygroupSelectionAnchor = primaryKeygroupIndex
             message = movedCount == 1
                 ? "Reordered the keygroup."
                 : "Reordered \(movedCount) keygroups."
@@ -1311,12 +1596,85 @@ struct P9EditorSheet: View {
         do {
             var program = document.program
             try program.spread(settings, to: selection)
-            document.replaceProgram(with: program)
-            bulkEdits = P9BulkEdits()
+            document.replaceProgram(
+                with: program,
+                actionName: "Spread Keygroups"
+            )
             let endNote = settings.startNote + selection.count - 1
             message = "Spread \(selection.count) keygroups from \(P9Keygroup.noteName(settings.startNote)) to \(P9Keygroup.noteName(endNote))."
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private var keygroupClipboardPayload: P9ClipboardPayload? {
+        let type = NSPasteboard.PasteboardType(P9ClipboardPayload.pasteboardType)
+        guard let data = NSPasteboard.general.data(forType: type),
+              let payload = try? JSONDecoder().decode(
+                P9ClipboardPayload.self,
+                from: data
+              )
+        else { return nil }
+        return try? payload.validated()
+    }
+
+    private func copyPrimaryKeygroup(kind: P9ClipboardPayload.Kind) {
+        guard let primary = primaryKeygroup?.id else {
+            NSSound.beep()
+            return
+        }
+        do {
+            let record = try document.program.keygroupRecords(at: [primary])[0]
+            let payload = P9ClipboardPayload(
+                kind: kind,
+                sourceProgram: document.program.name,
+                record: record
+            )
+            let data = try JSONEncoder().encode(payload)
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setData(
+                data,
+                forType: NSPasteboard.PasteboardType(
+                    P9ClipboardPayload.pasteboardType
+                )
+            )
+            message = "Copied \(clipboardDescription(kind)) from keygroup \(primary + 1)."
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func pasteKeygroupClipboard() {
+        guard let payload = keygroupClipboardPayload else {
+            NSSound.beep()
+            return
+        }
+        do {
+            try document.performEdit(actionName: "Paste Keygroup Parameters") { program in
+                switch payload.kind {
+                case .wholeKeygroup:
+                    try program.replaceKeygroups(at: selection, with: payload.record)
+                case .parameterGroup(let group):
+                    try program.applyParameterGroup(
+                        group,
+                        from: payload.record,
+                        to: selection
+                    )
+                }
+            }
+            message = "Pasted \(clipboardDescription(payload.kind)) to \(selection.count) keygroup\(selection.count == 1 ? "" : "s")."
+        } catch {
+            errorMessage =
+                (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
+    private func clipboardDescription(_ kind: P9ClipboardPayload.Kind) -> String {
+        switch kind {
+        case .wholeKeygroup: return "whole keygroup"
+        case .parameterGroup(let group): return group.title
         }
     }
 
@@ -1340,6 +1698,26 @@ struct P9EditorSheet: View {
             }
         } catch {
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    private func saveDocument() {
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        applyCurrentEdits(announce: false)
+        do {
+            switch document.source {
+            case .local:
+                let saved = try document.saveLocalSource()
+                message = "Saved \(saved.lastPathComponent)."
+            case .image:
+                showOverwriteConfirmation = true
+            case .newImageProgram:
+                createInImage()
+            }
+        } catch {
+            errorMessage =
+                (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 
@@ -1668,6 +2046,7 @@ private struct P9SpreadSheet: View {
 }
 
 private struct IndividualP9KeygroupEditor: View {
+    @ObservedObject var document: P9EditorDocument
     @Binding var keygroup: P9Keygroup
     @Binding var loudSampleExpanded: Bool
     let availableSampleNames: [String]
@@ -1938,7 +2317,16 @@ private struct IndividualP9KeygroupEditor: View {
                     .foregroundStyle(Color.suiteUnit)
                     .monospacedDigit()
             }
-            P9BoundedNumberField(value: value, range: range)
+            P9MixedBoundedNumberField(
+                value: value.wrappedValue,
+                primaryValue: value.wrappedValue,
+                range: range,
+                onBegin: {
+                    document.beginContinuousEdit(actionName: "Set \(title)")
+                },
+                onChange: { value.wrappedValue = $0 },
+                onEnd: document.endContinuousEdit
+            )
             Stepper("", value: value, in: range)
                 .labelsHidden()
         }
@@ -1999,6 +2387,478 @@ private struct IndividualP9KeygroupEditor: View {
             return [keygroup.output] + P9Output.standardChoices
         }
         return P9Output.standardChoices
+    }
+}
+
+private struct MixedP9KeygroupEditor: View {
+    @ObservedObject var document: P9EditorDocument
+    let selection: Set<Int>
+    let keygroups: [P9Keygroup]
+    let primaryKeygroup: P9Keygroup?
+    @Binding var loudSampleExpanded: Bool
+    let availableSampleNames: [String]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(
+                    "Mixed fields are labelled Mixed. Any entered, dragged or chosen value is applied absolutely to all \(selection.count) selected keygroups."
+                )
+                .font(SuiteFont.regular(11))
+                .foregroundStyle(Color.suiteUnit)
+
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        group("Mapping") {
+                            numberRow("Low key", \.lowKey, range: 0...127)
+                            numberRow("High key", \.highKey, range: 0...127)
+                            numberRow(
+                                "Velocity threshold",
+                                \.velocityThreshold,
+                                range: 0...128
+                            )
+                            choiceRow(
+                                "Velocity crossfade",
+                                keyPath: \.velocityCrossfade
+                            )
+                            choiceRow(
+                                "Custom midpoint",
+                                keyPath: \.customVelocityCrossfadePoint
+                            )
+                            numberRow(
+                                "Crossfade midpoint",
+                                \.velocityCrossfadePoint,
+                                range: 0...127
+                            )
+                        }
+                        sampleGroup(
+                            "Soft Sample",
+                            name: \.softSampleName,
+                            loudness: \.softLoudness,
+                            filter: \.softFilter,
+                            transpose: \.softTuning.transpose,
+                            fine: \.softTuning.fine
+                        )
+                        playbackGroup
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        group("VCF Envelope") {
+                            numberRow("Attack", \.vcfEnvelope.attack, range: 0...99)
+                            numberRow("Decay", \.vcfEnvelope.decay, range: 0...99)
+                            numberRow("Sustain", \.vcfEnvelope.sustain, range: 0...99)
+                            numberRow("Release", \.vcfEnvelope.release, range: 0...99)
+                            numberRow("Amount", \.vcfAmount, range: -50...50)
+                            numberRow("Key-filter", \.keyFilter, range: 0...99)
+                        }
+                        group("Amplitude ENV") {
+                            numberRow("Attack", \.envelope.attack, range: 0...99)
+                            numberRow("Decay", \.envelope.decay, range: 0...99)
+                            numberRow("Sustain", \.envelope.sustain, range: 0...99)
+                            numberRow(
+                                "Release",
+                                \.envelope.release,
+                                range: 0...99,
+                                accessibilityIdentifier:
+                                    "p9-mixed-amplitude-release"
+                            )
+                        }
+                        group("Velocity Sensitivity") {
+                            numberRow(
+                                "Loudness",
+                                \.velocitySensitivity.loudness,
+                                range: 0...99
+                            )
+                            numberRow(
+                                "Attack",
+                                \.velocitySensitivity.attack,
+                                range: 0...99
+                            )
+                            numberRow(
+                                "Filter",
+                                \.velocitySensitivity.filter,
+                                range: 0...99
+                            )
+                            numberRow(
+                                "Release",
+                                \.velocitySensitivity.release,
+                                range: -50...50
+                            )
+                            choiceRow(
+                                "Release from Note On",
+                                keyPath: \.releaseVelocityFromNoteOn
+                            )
+                        }
+                        loudSampleGroup
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                }
+            }
+            .controlSize(.small)
+            .padding(12)
+        }
+        .background(Color.suiteBackground)
+    }
+
+    private var playbackGroup: some View {
+        group("Playback and Routing") {
+            choiceRow("Constant pitch", keyPath: \.constantPitch)
+            choiceRow("One-shot", keyPath: \.oneShot)
+            numberRow("LFO depth", \.lfoDepth, range: 0...99)
+            optionalPickerRow(
+                "MIDI channel",
+                value: common(\.midiChannelOffset).map { $0 + 1 },
+                choices: Array(1...16),
+                label: { "\($0)" }
+            ) { value in
+                apply(\.midiChannelOffset, value: value - 1, name: "Set MIDI Channel")
+            }
+            optionalPickerRow(
+                "Output",
+                value: common(\.output),
+                choices: P9Output.standardChoices,
+                label: \.displayName
+            ) { value in
+                apply(\.output, value: value, name: "Set Output")
+            }
+        }
+    }
+
+    private var loudSampleGroup: some View {
+        GroupBox {
+            DisclosureGroup(isExpanded: $loudSampleExpanded) {
+                sampleRows(
+                    name: \.loudSampleName,
+                    loudness: \.loudLoudness,
+                    filter: \.loudFilter,
+                    transpose: \.loudTuning.transpose,
+                    fine: \.loudTuning.fine
+                )
+                .padding(.top, 8)
+            } label: {
+                Text("Loud Sample").fontWeight(.medium)
+            }
+            .padding(6)
+        }
+    }
+
+    private func sampleGroup(
+        _ title: String,
+        name: WritableKeyPath<P9Keygroup, String>,
+        loudness: WritableKeyPath<P9Keygroup, Int>,
+        filter: WritableKeyPath<P9Keygroup, Int>,
+        transpose: WritableKeyPath<P9Keygroup, Int>,
+        fine: WritableKeyPath<P9Keygroup, Int>
+    ) -> some View {
+        group(title) {
+            sampleRows(
+                name: name,
+                loudness: loudness,
+                filter: filter,
+                transpose: transpose,
+                fine: fine
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func sampleRows(
+        name: WritableKeyPath<P9Keygroup, String>,
+        loudness: WritableKeyPath<P9Keygroup, Int>,
+        filter: WritableKeyPath<P9Keygroup, Int>,
+        transpose: WritableKeyPath<P9Keygroup, Int>,
+        fine: WritableKeyPath<P9Keygroup, Int>
+    ) -> some View {
+        optionalPickerRow(
+            "Sample",
+            value: common(name),
+            choices: [""] + availableSampleNames,
+            label: { $0.isEmpty ? "No sample" : $0 }
+        ) { value in
+            apply(name, value: value, name: "Assign Sample")
+        }
+        numberRow("Loudness", loudness, range: -50...50)
+        numberRow("Filter", filter, range: 0...99)
+        numberRow("Transpose", transpose, range: P9Tuning.transposeRange)
+        numberRow("Fine", fine, range: P9Tuning.fineRange)
+    }
+
+    private func group<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        GroupBox(title) {
+            VStack(spacing: 7) { content() }
+                .padding(6)
+        }
+    }
+
+    private func numberRow(
+        _ title: String,
+        _ keyPath: WritableKeyPath<P9Keygroup, Int>,
+        range: ClosedRange<Int>,
+        accessibilityIdentifier: String? = nil
+    ) -> some View {
+        let commonValue = common(keyPath)
+        let primaryValue = primaryKeygroup?[keyPath: keyPath]
+            ?? commonValue
+            ?? range.lowerBound
+        return HStack(spacing: 8) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            P9MixedBoundedNumberField(
+                value: commonValue,
+                primaryValue: primaryValue,
+                range: range,
+                accessibilityIdentifier: accessibilityIdentifier,
+                onBegin: { document.beginContinuousEdit(actionName: "Set \(title)") },
+                onChange: { apply(keyPath, value: $0, name: "Set \(title)") },
+                onEnd: document.endContinuousEdit
+            )
+            Stepper(
+                "",
+                value: Binding(
+                    get: { primaryValue },
+                    set: { apply(keyPath, value: $0, name: "Set \(title)") }
+                ),
+                in: range
+            )
+            .labelsHidden()
+        }
+    }
+
+    private func choiceRow(
+        _ title: String,
+        keyPath: WritableKeyPath<P9Keygroup, Bool>
+    ) -> some View {
+        optionalPickerRow(
+            title,
+            value: common(keyPath),
+            choices: [false, true],
+            label: { $0 ? "On" : "Off" }
+        ) { value in
+            apply(keyPath, value: value, name: "Set \(title)")
+        }
+    }
+
+    private func optionalPickerRow<Value: Hashable>(
+        _ title: String,
+        value: Value?,
+        choices: [Value],
+        label: @escaping (Value) -> String,
+        onSet: @escaping (Value) -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Picker(
+                "",
+                selection: Binding<Value?>(
+                    get: { value },
+                    set: { if let value = $0 { onSet(value) } }
+                )
+            ) {
+                if value == nil { Text("Mixed").tag(Value?.none) }
+                ForEach(Array(choices.enumerated()), id: \.offset) { _, choice in
+                    Text(label(choice)).tag(Optional(choice))
+                }
+            }
+            .labelsHidden()
+            .frame(width: 190)
+        }
+    }
+
+    private func common<Value: Equatable>(
+        _ keyPath: KeyPath<P9Keygroup, Value>
+    ) -> Value? {
+        P9SelectionValues.mixedValue(in: keygroups, keyPath).commonValue
+    }
+
+    private func apply<Value>(
+        _ keyPath: WritableKeyPath<P9Keygroup, Value>,
+        value: Value,
+        name: String
+    ) {
+        do {
+            try document.performEdit(actionName: name) { program in
+                guard selection.allSatisfy(program.keygroups.indices.contains) else {
+                    throw P9ProgramError.invalidKeygroup(
+                        selection.first(where: {
+                            !program.keygroups.indices.contains($0)
+                        }) ?? -1
+                    )
+                }
+                for index in selection.sorted() {
+                    program.keygroups[index][keyPath: keyPath] = value
+                }
+            }
+        } catch {
+            NSSound.beep()
+        }
+    }
+}
+
+private struct P9MixedBoundedNumberField: View {
+    let value: Int?
+    let primaryValue: Int
+    let range: ClosedRange<Int>
+    var accessibilityIdentifier: String? = nil
+    let onBegin: () -> Void
+    let onChange: (Int) -> Void
+    let onEnd: () -> Void
+
+    var body: some View {
+        P9MixedDraggableNumberTextField(
+            value: value,
+            primaryValue: primaryValue,
+            range: range,
+            accessibilityIdentifier: accessibilityIdentifier,
+            onBegin: onBegin,
+            onChange: onChange,
+            onEnd: onEnd
+        )
+        .frame(width: 58)
+        .help(
+            "Type or use arrow keys for exact edits; drag from the primary "
+                + "keygroup value. Shift drags finely and Option adjusts coarsely."
+        )
+    }
+}
+
+private struct P9MixedDraggableNumberTextField: NSViewRepresentable {
+    let value: Int?
+    let primaryValue: Int
+    let range: ClosedRange<Int>
+    let accessibilityIdentifier: String?
+    let onBegin: () -> Void
+    let onChange: (Int) -> Void
+    let onEnd: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.alignment = .right
+        field.controlSize = .small
+        field.font = NSFont(name: "JetBrainsMono-Regular", size: 11)
+        field.placeholderString = "Mixed"
+        if let accessibilityIdentifier {
+            field.setAccessibilityIdentifier(accessibilityIdentifier)
+        }
+        field.delegate = context.coordinator
+        context.coordinator.field = field
+        let pan = NSPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.dragged(_:))
+        )
+        pan.buttonMask = 0x1
+        field.addGestureRecognizer(pan)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        context.coordinator.parent = self
+        guard !context.coordinator.isEditing,
+              context.coordinator.dragStartValue == nil
+        else { return }
+        field.stringValue = value.map(String.init) ?? ""
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: P9MixedDraggableNumberTextField
+        weak var field: NSTextField?
+        var dragStartValue: Int?
+        var isEditing = false
+        var editingStartValue: Int?
+
+        init(parent: P9MixedDraggableNumberTextField) { self.parent = parent }
+
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            isEditing = true
+            editingStartValue = parent.value
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            defer {
+                isEditing = false
+                editingStartValue = nil
+                field?.stringValue = parent.value.map(String.init) ?? ""
+            }
+            guard let field,
+                  let value = P9NumericInput.boundedValue(
+                    field.stringValue,
+                    range: parent.range
+                  )
+            else { return }
+            parent.onChange(value)
+        }
+
+        func control(
+            _ control: NSControl,
+            textView: NSTextView,
+            doCommandBy commandSelector: Selector
+        ) -> Bool {
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                field?.stringValue = editingStartValue.map(String.init) ?? ""
+                field?.window?.makeFirstResponder(nil)
+                return true
+            }
+            let direction: Int
+            if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                direction = 1
+            } else if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                direction = -1
+            } else {
+                return false
+            }
+            guard let field else { return true }
+            let current = P9NumericInput.boundedValue(
+                field.stringValue,
+                range: parent.range
+            ) ?? parent.value ?? parent.primaryValue
+            let modifiers = NSApp.currentEvent?.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) ?? []
+            let updated = P9NumericInput.incrementedValue(
+                from: current,
+                direction: direction,
+                range: parent.range,
+                coarse: modifiers.contains(.option)
+            )
+            field.stringValue = String(updated)
+            editingStartValue = updated
+            parent.onChange(updated)
+            field.currentEditor()?.selectAll(nil)
+            return true
+        }
+
+        @objc func dragged(_ recognizer: NSPanGestureRecognizer) {
+            guard let field else { return }
+            switch recognizer.state {
+            case .began:
+                dragStartValue = parent.primaryValue
+                parent.onBegin()
+                field.window?.makeFirstResponder(nil)
+            case .changed:
+                let modifiers = NSApp.currentEvent?.modifierFlags
+                    .intersection(.deviceIndependentFlagsMask) ?? []
+                let updated = P9NumericInput.draggedValue(
+                    from: dragStartValue ?? parent.primaryValue,
+                    verticalTranslation: -recognizer.translation(in: field).y,
+                    range: parent.range,
+                    pointsPerStep: modifiers.contains(.shift) ? 8 : 2,
+                    stepMultiplier: modifiers.contains(.option) ? 10 : 1
+                )
+                parent.onChange(updated)
+                field.stringValue = String(updated)
+            case .ended, .cancelled, .failed:
+                dragStartValue = nil
+                parent.onEnd()
+                field.stringValue = parent.value.map(String.init) ?? ""
+            default:
+                break
+            }
+        }
     }
 }
 
@@ -2113,336 +2973,5 @@ private struct P9DraggableNumberTextField: NSViewRepresentable {
                 break
             }
         }
-    }
-}
-
-private enum P9BulkOperationChoice: String, CaseIterable, Identifiable {
-    case unchanged = "Unchanged"
-    case set = "Set"
-    case adjust = "Adjust"
-
-    var id: Self { self }
-
-    init(operation: P9BulkMode?) {
-        switch operation {
-        case .set: self = .set
-        case .adjust: self = .adjust
-        case nil: self = .unchanged
-        }
-    }
-
-    var operation: P9BulkMode? {
-        switch self {
-        case .unchanged: nil
-        case .set: .set
-        case .adjust: .adjust
-        }
-    }
-}
-
-private struct P9BulkOperationPicker: NSViewRepresentable {
-    @Binding var selection: P9BulkOperationChoice
-    let accessibilityIdentifier: String?
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(parent: self)
-    }
-
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
-        picker.controlSize = .small
-        picker.addItems(
-            withTitles: P9BulkOperationChoice.allCases.map(\.rawValue)
-        )
-        picker.target = context.coordinator
-        picker.action = #selector(Coordinator.selectionChanged(_:))
-        if let accessibilityIdentifier {
-            picker.setAccessibilityIdentifier(accessibilityIdentifier)
-        }
-        return picker
-    }
-
-    func updateNSView(_ picker: NSPopUpButton, context: Context) {
-        context.coordinator.parent = self
-        picker.selectItem(withTitle: selection.rawValue)
-    }
-
-    final class Coordinator: NSObject {
-        var parent: P9BulkOperationPicker
-
-        init(parent: P9BulkOperationPicker) {
-            self.parent = parent
-        }
-
-        @objc func selectionChanged(_ sender: NSPopUpButton) {
-            guard let title = sender.selectedItem?.title,
-                  let choice = P9BulkOperationChoice(rawValue: title)
-            else { return }
-            parent.selection = choice
-        }
-    }
-}
-
-private struct BulkP9KeygroupEditor: View {
-    @Binding var edits: P9BulkEdits
-    @Binding var loudSampleExpanded: Bool
-    let availableSampleNames: [String]
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text(
-                    "Choose Set or Adjust to activate a field. Unchanged fields are left alone; "
-                        + "Adjust adds or subtracts the value from every selected keygroup."
-                )
-                    .font(SuiteFont.regular(11))
-                    .foregroundStyle(Color.suiteUnit)
-
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        bulkGroup("Mapping") {
-                            bulkRow("Low key", \.lowKey, range: 0...127)
-                            bulkRow("High key", \.highKey, range: 0...127)
-                            bulkRow("Velocity threshold", \.velocityThreshold, range: 0...128)
-                            bulkRow(
-                                "Crossfade midpoint",
-                                \.velocityCrossfadePoint,
-                                range: 0...127
-                            )
-                            optionalChoicePicker(
-                                "Custom midpoint",
-                                trueLabel: "Enable",
-                                falseLabel: "Disable",
-                                value: binding(\.customVelocityCrossfadePoint)
-                            )
-                        }
-                        bulkGroup("Soft Sample") {
-                            bulkSamplePicker(
-                                "Sample",
-                                value: binding(\.softSampleName)
-                            )
-                            bulkRow("Loudness", \.softLoudness, range: -50...50)
-                            bulkRow("Filter", \.softFilter, range: 0...99)
-                            bulkRow("Transpose", \.softTranspose, range: P9Tuning.transposeRange)
-                            bulkRow("Fine", \.softFine, range: P9Tuning.fineRange)
-                        }
-                        bulkGroup("VCF Envelope") {
-                            bulkRow("Attack", \.vcfAttack, range: 0...99)
-                            bulkRow("Decay", \.vcfDecay, range: 0...99)
-                            bulkRow("Sustain", \.vcfSustain, range: 0...99)
-                            bulkRow("Release", \.vcfRelease, range: 0...99)
-                            bulkRow("Amount", \.vcfAmount, range: -50...50)
-                            bulkRow("Key-filter", \.keyFilter, range: 0...99)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .top)
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        bulkGroup("Amplitude ENV") {
-                            bulkRow("Attack", \.envAttack, range: 0...99)
-                            bulkRow("Decay", \.envDecay, range: 0...99)
-                            bulkRow("Sustain", \.envSustain, range: 0...99)
-                            bulkRow(
-                                "Release",
-                                \.envRelease,
-                                range: 0...99,
-                                accessibilityID: "p9-bulk-amplitude-release"
-                            )
-                        }
-                        bulkGroup("Velocity Sensitivity") {
-                            bulkRow("Loudness", \.velocityLoudness, range: 0...99)
-                            bulkRow("Attack", \.velocityAttack, range: 0...99)
-                            bulkRow("Filter", \.velocityFilter, range: 0...99)
-                            bulkRow("Release", \.velocityRelease, range: -50...50)
-                            optionalChoicePicker(
-                                "Release source",
-                                trueLabel: "Note On",
-                                falseLabel: "Note Off",
-                                value: binding(\.releaseVelocityFromNoteOn)
-                            )
-                        }
-                        playbackAndRouting
-                        loudSampleSection
-                    }
-                    .frame(maxWidth: .infinity, alignment: .top)
-                }
-            }
-            .controlSize(.small)
-            .padding(12)
-        }
-        .background(Color.suiteBackground)
-    }
-
-    private var playbackAndRouting: some View {
-        GroupBox("Playback and Routing") {
-            VStack(spacing: 7) {
-                optionalBooleanPicker("Constant pitch", value: binding(\.constantPitch))
-                optionalBooleanPicker("Velocity crossfade", value: binding(\.velocityCrossfade))
-                optionalBooleanPicker("One-shot", value: binding(\.oneShot))
-                bulkRow("LFO depth", \.lfoDepth, range: 0...99)
-                HStack(spacing: 8) {
-                    Text("MIDI channel")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Picker("", selection: binding(\.midiChannel)) {
-                        Text("Unchanged").tag(Int?.none)
-                        ForEach(1...16, id: \.self) { channel in
-                            Text("\(channel)").tag(Optional(channel))
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 160)
-                }
-                HStack(spacing: 8) {
-                    Text("Output")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Picker("", selection: binding(\.output)) {
-                        Text("Unchanged").tag(P9Output?.none)
-                        ForEach(P9Output.standardChoices) { output in
-                            Text(output.displayName).tag(Optional(output))
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(width: 160)
-                }
-            }
-            .padding(6)
-        }
-    }
-
-    private var loudSampleSection: some View {
-        GroupBox {
-            DisclosureGroup(isExpanded: $loudSampleExpanded) {
-                VStack(spacing: 7) {
-                    bulkSamplePicker(
-                        "Sample",
-                        value: binding(\.loudSampleName)
-                    )
-                    bulkRow("Loudness", \.loudLoudness, range: -50...50)
-                    bulkRow("Filter", \.loudFilter, range: 0...99)
-                    bulkRow("Transpose", \.loudTranspose, range: P9Tuning.transposeRange)
-                    bulkRow("Fine", \.loudFine, range: P9Tuning.fineRange)
-                }
-                .padding(.top, 8)
-            } label: {
-                Text("Loud Sample")
-                    .fontWeight(.medium)
-            }
-            .padding(6)
-        }
-    }
-
-    private func bulkGroup<Content: View>(
-        _ title: String,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        GroupBox(title) {
-            VStack(spacing: 7) {
-                content()
-            }
-            .padding(6)
-        }
-    }
-
-    private func bulkRow(
-        _ title: String,
-        _ keyPath: WritableKeyPath<P9BulkEdits, P9BulkNumberEdit>,
-        range: ClosedRange<Int>,
-        accessibilityID: String? = nil
-    ) -> some View {
-        let field = binding(keyPath)
-        let operation = Binding<P9BulkOperationChoice>(
-            get: { P9BulkOperationChoice(operation: field.wrappedValue.operation) },
-            set: { choice in
-                var updated = field.wrappedValue
-                updated.operation = choice.operation
-                field.wrappedValue = updated
-            }
-        )
-        return HStack(spacing: 8) {
-            Text(title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            P9BulkOperationPicker(
-                selection: operation,
-                accessibilityIdentifier:
-                    accessibilityID.map { "\($0)-operation" }
-            )
-            .frame(width: 112)
-            HStack(spacing: 3) {
-                P9BoundedNumberField(
-                    value: Binding(
-                        get: { field.wrappedValue.value },
-                        set: { field.wrappedValue.value = $0 }
-                    ),
-                    range: field.wrappedValue.mode == .set ? range : -128...128,
-                    accessibilityIdentifier:
-                        accessibilityID.map { "\($0)-value" }
-                )
-                Stepper(
-                    "",
-                    value: Binding(
-                        get: { field.wrappedValue.value },
-                        set: { field.wrappedValue.value = $0 }
-                    ),
-                    in: field.wrappedValue.mode == .set ? range : -128...128
-                )
-                .labelsHidden()
-            }
-            .frame(width: 86, alignment: .trailing)
-            .disabled(operation.wrappedValue == .unchanged)
-        }
-    }
-
-    private func optionalBooleanPicker(_ title: String, value: Binding<Bool?>) -> some View {
-        optionalChoicePicker(
-            title,
-            trueLabel: "Enable",
-            falseLabel: "Disable",
-            value: value
-        )
-    }
-
-    private func bulkSamplePicker(
-        _ title: String,
-        value: Binding<String?>
-    ) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Picker("", selection: value) {
-                Text("Unchanged").tag(String?.none)
-                Text("No sample").tag(String?.some(""))
-                ForEach(availableSampleNames, id: \.self) { sampleName in
-                    Text(sampleName).tag(String?.some(sampleName))
-                }
-            }
-            .labelsHidden()
-            .frame(width: 206)
-        }
-    }
-
-    private func optionalChoicePicker(
-        _ title: String,
-        trueLabel: String,
-        falseLabel: String,
-        value: Binding<Bool?>
-    ) -> some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Picker("", selection: value) {
-                Text("Unchanged").tag(Bool?.none)
-                Text(trueLabel).tag(Bool?.some(true))
-                Text(falseLabel).tag(Bool?.some(false))
-            }
-            .labelsHidden()
-            .frame(width: 160)
-        }
-    }
-
-    private func binding<Value>(_ keyPath: WritableKeyPath<P9BulkEdits, Value>) -> Binding<Value> {
-        Binding(
-            get: { edits[keyPath: keyPath] },
-            set: { edits[keyPath: keyPath] = $0 }
-        )
     }
 }

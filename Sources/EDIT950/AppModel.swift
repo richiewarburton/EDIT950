@@ -95,7 +95,9 @@ final class AppModel: ObservableObject {
     @Published var showDeleteConfirmation = false
     @Published var showDeleteAllConfirmation = false
     @Published var fileInformation: AkaiFileInformation?
-    @Published var p9EditorDocument: P9EditorDocument?
+    @Published var p9EditorDocument: P9EditorDocument? {
+        didSet { p9EditorDocument?.undoManager = undoManager }
+    }
     @Published var externalSampleEditSession: ExternalSampleEditSession?
     @Published var incompleteImageURL: URL?
     @Published var currentReadOnlyChoice = false
@@ -118,7 +120,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var tagLibraryDirectoryURL: URL
     @Published var showTagManager = false
 
-    weak var undoManager: UndoManager?
+    weak var undoManager: UndoManager? {
+        didSet { p9EditorDocument?.undoManager = undoManager }
+    }
 
     let diagnostics = DiagnosticLogStore(appName: "EDIT950")
     let settings: AppSettings
@@ -765,6 +769,13 @@ final class AppModel: ObservableObject {
         guard let first = urls.first else { return }
         if urls.count == 1,
            first.pathExtension.caseInsensitiveCompare(
+               P9LiveEditSessionRequest.fileExtension
+           ) == .orderedSame {
+            handleLiveEditSessionRequest(at: first)
+            return
+        }
+        if urls.count == 1,
+           first.pathExtension.caseInsensitiveCompare(
                Tools950Interop.requestExtension
            ) == .orderedSame {
             handleFocusedExportRequest(at: first)
@@ -776,6 +787,61 @@ final class AppModel: ObservableObject {
             return
         }
         handleDroppedURLs(urls)
+    }
+
+    func handleLiveEditSessionRequest(at requestURL: URL) {
+        start {
+            defer { try? FileManager.default.removeItem(at: requestURL) }
+            let request = try P9LiveEditSessionRequest.read(from: requestURL)
+            let imageURL = URL(fileURLWithPath: request.imagePath)
+                .standardizedFileURL.resolvingSymlinksInPath()
+            try await self.openImage(imageURL, readOnly: false)
+
+            let nameKey = Self.normalizedP9NameKey(request.programFilename)
+            if self.p9File(matchingNameKey: nameKey) == nil {
+                let volumePaths = self.snapshot.volumes.map(\.path)
+                for volumePath in volumePaths where
+                    volumePath != self.snapshot.currentPath {
+                    _ = try await self.run(
+                        try AkaiCommandBuilder.changeDirectory(volumePath)
+                    )
+                    try await self.refresh()
+                    if self.p9File(matchingNameKey: nameKey) != nil { break }
+                }
+            }
+            guard self.p9File(matchingNameKey: nameKey) != nil else {
+                throw AppError.verificationFailed(
+                    "PLAY950's selected program \(request.programFilename) is no longer present in the IMG."
+                )
+            }
+
+            let document = try P9EditorDocument(
+                data: request.programData,
+                source: .image(
+                    filename: request.programFilename,
+                    imageURL: imageURL,
+                    volumePath: self.snapshot.currentPath
+                ),
+                baselineData: request.baselineProgramData
+            )
+            document.undoManager = self.undoManager
+            document.liveAuditionClient = P9LiveAuditionClient(
+                instanceID: request.instanceID,
+                initialRevision: request.revision
+            )
+            self.p9EditorDocument = document
+            NSApp.activate(ignoringOtherApps: true)
+            self.diagnostics.record(
+                .info,
+                category: "play950",
+                message: "Live edit session connected",
+                fields: [
+                    "instance": request.instanceID,
+                    "program": request.programFilename,
+                    "image": imageURL.path
+                ]
+            )
+        }
     }
 
     func handleDroppedURLs(_ urls: [URL]) {
@@ -2199,16 +2265,30 @@ final class AppModel: ObservableObject {
         let stagedURL = workspace.url.appendingPathComponent(stagedFilename)
         try editedData.write(to: stagedURL, options: .atomic)
 
+        let stagedImageURL = workspace.url.appendingPathComponent(
+            "staged-\(activeSession.imageURL.lastPathComponent)"
+        )
+        let stagedSession = ImageSession(
+            imageURL: stagedImageURL,
+            readOnly: false,
+            removableVolumeURL: nil,
+            openedAt: Date()
+        )
+
         progress = OperationProgress(
             kind: .overwriting,
             current: 0,
-            total: 5,
-            detail: "Closing the IMG safely"
+            total: 8,
+            detail: "Preparing an atomic IMG save"
         )
         await controller.close()
 
         let backupURL: URL?
+        let sourceImageChecksum: String
         do {
+            sourceImageChecksum = try ImageFileOperations.sha256Hex(
+                of: activeSession.imageURL
+            )
             if createBackup {
                 updateProgress(1, detail: "Creating and verifying a complete IMG backup")
                 backupURL = try createTimestampedBackup(
@@ -2218,13 +2298,21 @@ final class AppModel: ObservableObject {
                 updateProgress(1, detail: "Continuing without an IMG backup")
                 backupURL = nil
             }
-            try await reopenImageSession(activeSession)
+            updateProgress(2, detail: "Creating a verified staging IMG")
+            try ImageFileOperations.copyAtomicallyAndVerify(
+                source: activeSession.imageURL,
+                destination: stagedImageURL
+            )
+            try await reopenImageSession(stagedSession)
+            try await returnToVolume(sourceVolumePath)
         } catch {
+            await controller.close()
             try? await reopenImageSession(activeSession)
+            try? await returnToVolume(sourceVolumePath)
             throw error
         }
 
-        var mutationStarted = false
+        var committed = false
         do {
             guard let currentFile = p9File(matchingNameKey: sourceNameKey) else {
                 throw AppError.verificationFailed(
@@ -2232,11 +2320,48 @@ final class AppModel: ObservableObject {
                 )
             }
 
-            updateProgress(2, detail: "Replacing \(currentFile.name)")
+            updateProgress(3, detail: "Checking for external P9 changes")
+            let baselineDirectory = workspace.url.appendingPathComponent(
+                "baseline",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: baselineDirectory,
+                withIntermediateDirectories: true
+            )
+            _ = try await run(
+                try AkaiCommandBuilder.localDirectory(baselineDirectory.path)
+            )
+            _ = try await run(
+                try AkaiCommandBuilder.exportNative(index: currentFile.index)
+            )
+            let baselineExports = try FileManager.default.contentsOfDirectory(
+                at: baselineDirectory,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )
+            guard let baselineExport = baselineExports.first(where: {
+                $0.pathExtension.caseInsensitiveCompare("p9") == .orderedSame
+            }) else {
+                throw AppError.verificationFailed(
+                    "AKAI Util could not export the current P9 for conflict checking."
+                )
+            }
+            let normalizedBaseline = try NativeAkaiFileExport.normalizeExportedFile(
+                baselineExport,
+                expectedFilename: currentFile.name
+            )
+            let currentStoredData = try Data(contentsOf: normalizedBaseline)
+            guard currentStoredData == document.originalData else {
+                throw AppError.verificationFailed(
+                    "\(sourceFilename) changed outside this editor after it was opened. The source IMG was not replaced. Reopen the P9 before saving."
+                )
+            }
+
+            updateProgress(4, detail: "Replacing \(currentFile.name) in the staging IMG")
             _ = try await run(
                 try AkaiCommandBuilder.localDirectory(workspace.url.path)
             )
-            mutationStarted = true
             _ = try await run(try AkaiCommandBuilder.delete(index: currentFile.index))
             _ = try await run(
                 try AkaiCommandBuilder.importNative(
@@ -2244,7 +2369,7 @@ final class AppModel: ObservableObject {
                 )
             )
 
-            updateProgress(3, detail: "Re-reading the destination volume")
+            updateProgress(5, detail: "Re-reading the staging volume")
             try await refresh()
             guard let storedFile = p9File(matchingNameKey: sourceNameKey) else {
                 throw AppError.verificationFailed(
@@ -2260,7 +2385,7 @@ final class AppModel: ObservableObject {
                     options: [.skipsHiddenFiles]
                 ).map(\.standardizedFileURL)
             )
-            updateProgress(4, detail: "Exporting \(storedFile.name) for byte verification")
+            updateProgress(6, detail: "Exporting \(storedFile.name) for byte verification")
             _ = try await run(try AkaiCommandBuilder.exportNative(index: storedFile.index))
             let filesAfterVerification = try FileManager.default.contentsOfDirectory(
                 at: workspace.url,
@@ -2293,7 +2418,24 @@ final class AppModel: ObservableObject {
                 )
             }
 
-            updateProgress(5, detail: "Overwrite verified")
+            updateProgress(7, detail: "Atomically replacing the source IMG")
+            await controller.close()
+            guard try ImageFileOperations.sha256Hex(
+                of: activeSession.imageURL
+            ) == sourceImageChecksum else {
+                throw AppError.verificationFailed(
+                    "The source IMG changed outside EDIT950 while the staged save was being prepared. The source was not replaced."
+                )
+            }
+            try ImageFileOperations.copyAtomicallyAndVerify(
+                source: stagedImageURL,
+                destination: activeSession.imageURL
+            )
+            committed = true
+            try await reopenImageSession(activeSession)
+            try await returnToVolume(sourceVolumePath)
+
+            updateProgress(8, detail: "Atomic save verified")
             try document.markOverwritten(with: verifiedData)
             let result = P9OverwriteResult(
                 filename: storedFile.name,
@@ -2314,35 +2456,28 @@ final class AppModel: ObservableObject {
             )
             return result
         } catch {
-            guard mutationStarted else { throw error }
             let originalMessage =
                 (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
-            guard let backupURL else {
-                try? await refresh()
-                throw AppError.verificationFailed(
-                    "P9 overwrite did not complete and no IMG backup was created, so automatic rollback is unavailable. Do not use the IMG until it has been checked or restored manually. Cause: \(originalMessage)"
-                )
-            }
+            await controller.close()
             do {
-                try await restoreImageSession(activeSession, from: backupURL)
-            } catch {
-                let rollbackMessage =
-                    (error as? LocalizedError)?.errorDescription
-                    ?? error.localizedDescription
+                try await reopenImageSession(activeSession)
+                try await returnToVolume(sourceVolumePath)
+            } catch let reopenError {
+                let reopenMessage = reopenError.localizedDescription
                 session = nil
                 snapshot = DiskSnapshot()
                 selection.removeAll()
                 throw AppError.verificationFailed(
-                    "P9 overwrite failed and automatic IMG restoration also failed. "
-                        + "Do not use the destination IMG. Restore it manually from "
-                        + "\(backupURL.path). Overwrite error: \(originalMessage) "
-                        + "Restoration error: \(rollbackMessage)"
+                    committed
+                        ? "The atomic IMG save completed, but EDIT950 could not reopen it. Save error: \(originalMessage) Reopen error: \(reopenMessage)"
+                        : "The staged save failed before the source IMG was replaced, and EDIT950 could not reopen the unchanged source. Save error: \(originalMessage) Reopen error: \(reopenMessage)"
                 )
             }
             throw AppError.verificationFailed(
-                "P9 overwrite did not complete. The original IMG was restored and verified "
-                    + "from \(backupURL.lastPathComponent). Cause: \(originalMessage)"
+                committed
+                    ? "The atomic IMG save completed, but its final editor state could not be updated. Cause: \(originalMessage)"
+                    : "P9 overwrite did not complete. The staged IMG was discarded and the source IMG remained unchanged. Cause: \(originalMessage)"
             )
         }
     }
@@ -2834,6 +2969,7 @@ final class AppModel: ObservableObject {
             alert.addButton(withTitle: "Close Without Saving")
             guard alert.runModal() == .alertSecondButtonReturn else { return false }
         }
+        document.discardUnsavedChanges()
         p9EditorDocument = nil
         return true
     }

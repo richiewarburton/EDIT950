@@ -29,6 +29,8 @@ CLANG_MODULE_CACHE_PATH="$BUILD_DIR/ModuleCache" swiftc \
   Sources/EDIT950/AkaiOutputParser.swift \
   Sources/EDIT950/AkaiCommandController.swift \
   Sources/EDIT950/FileOperations.swift \
+  Sources/EDIT950/P9EditingSession.swift \
+  Sources/EDIT950/P9LiveAudition.swift \
   Sources/EDIT950/P9Program.swift \
   Sources/EDIT950/PLAY950Fixture.swift \
   Sources/EDIT950/AbletonDrumRackImport.swift \

@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.47 (build 68)**
+Current source: **1.8.48 (build 69)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -25,17 +25,16 @@ keys, eight-voice stealing, Soft-layer tuning, Constant Pitch, looping,
 amplitude/filter envelopes, velocity and keyboard tracking, program teardown,
 audio-engine self-recovery on Note On and Panic, byte-preserving keygroup
 reordering, bulk-edit model operations, zero-value serialization and
-bounded on-screen diagnostic rendering.
+bounded on-screen diagnostic rendering. The P9 coverage includes direct
+multi-selection editing, Mixed values, absolute parameter-group paste,
+continuous-gesture Undo grouping, recovery journals, source-conflict detection,
+atomic staged IMG replacement and the versioned PLAY950 live-audition protocol.
 It also verifies that bandwidth conversion scales loop endpoints to the
 converted WAV's measured frame count, keeps current audition playback alive
 until the new preview is ready, and exposes the Finder association controls for
-IMG, P9 and S9. The current accepted run completed with **90 passed and 0
-failed**, followed by a rendered, preselected 41-keygroup bulk-Release fixture
-that selects Set, applies zero to the generated editor model, encodes and
-reopens the edited P9. That deterministic fixture does not prove the live
-multi-selection UI workflow: bulk edits made through the real editor remain
-unreliable for any selection of more than one keygroup and are tracked in
-[issue #6](https://github.com/richiewarburton/EDIT950/issues/6).
+IMG, P9 and S9. The current accepted run completed with **96 passed and 0
+failed**, followed by a rendered Mixed-value editor fixture that applies an
+absolute Release edit through the real multi-selection control.
 
 The following broader checks are also available:
 
@@ -116,8 +115,8 @@ Automated and manual checks confirm that:
 
 ## Release status
 
-Known release limitation: do not rely on a bulk P9 edit when more than one
-keygroup is selected. Edit one keygroup at a time and verify the reopened P9.
+The previously reported multi-keygroup editing failure is covered by direct UI,
+model, save and reopen regressions in this release.
 
 The local build is ad-hoc signed, not Developer ID signed or notarized. A
 packaged public release should be regenerated after source or release-document

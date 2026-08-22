@@ -599,10 +599,107 @@ struct P9Program: Equatable {
             keygroups.remove(at: index)
             keygroupOriginalRecords.remove(at: index)
         }
-        for index in keygroups.indices {
-            keygroups[index].id = index
+        reindexKeygroups()
+        markStructureTransferSafe()
+    }
+
+    /// Duplicates every selected native record in selection order and inserts
+    /// the new block immediately after the last selected keygroup.
+    @discardableResult
+    mutating func duplicateKeygroups(at indexes: Set<Int>) throws -> Range<Int> {
+        let selected = indexes.sorted()
+        guard !selected.isEmpty else { throw P9EditingError.emptySelection }
+        guard selected.allSatisfy(keygroups.indices.contains) else {
+            throw P9ProgramError.invalidKeygroup(
+                selected.first(where: { !keygroups.indices.contains($0) }) ?? -1
+            )
+        }
+        guard keygroups.count + selected.count <= 99 else {
+            throw P9ProgramError.tooManyKeygroups(keygroups.count + selected.count)
+        }
+
+        let records = try keygroupRecords(at: indexes).map {
+            Self.clearingTransferredRuntimeAddresses(in: $0)
+        }
+        let insertion = (selected.last ?? -1) + 1
+        for (offset, record) in records.enumerated() {
+            keygroupOriginalRecords.insert(record, at: insertion + offset)
+            keygroups.insert(
+                P9Keygroup(id: insertion + offset, record: record),
+                at: insertion + offset
+            )
+        }
+        reindexKeygroups()
+        markStructureTransferSafe()
+        return insertion..<(insertion + records.count)
+    }
+
+    mutating func replaceKeygroups(at indexes: Set<Int>, with record: Data) throws {
+        guard !indexes.isEmpty else { throw P9EditingError.emptySelection }
+        guard record.count == Self.keygroupSize else {
+            throw P9ProgramError.invalidKeygroupRecord(record.count)
+        }
+        guard indexes.allSatisfy(keygroups.indices.contains) else {
+            throw P9ProgramError.invalidKeygroup(
+                indexes.first(where: { !keygroups.indices.contains($0) }) ?? -1
+            )
+        }
+        let safeRecord = Self.clearingTransferredRuntimeAddresses(in: record)
+        for index in indexes.sorted() {
+            keygroupOriginalRecords[index] = safeRecord
+            keygroups[index] = P9Keygroup(id: index, record: safeRecord)
         }
         markStructureTransferSafe()
+    }
+
+    mutating func applyParameterGroup(
+        _ group: P9ParameterGroup,
+        from record: Data,
+        to indexes: Set<Int>
+    ) throws {
+        guard !indexes.isEmpty else { throw P9EditingError.emptySelection }
+        guard record.count == Self.keygroupSize else {
+            throw P9ProgramError.invalidKeygroupRecord(record.count)
+        }
+        guard indexes.allSatisfy(keygroups.indices.contains) else {
+            throw P9ProgramError.invalidKeygroup(
+                indexes.first(where: { !keygroups.indices.contains($0) }) ?? -1
+            )
+        }
+        let source = P9Keygroup(id: 0, record: record)
+        for index in indexes.sorted() {
+            switch group {
+            case .filter:
+                keygroups[index].softFilter = source.softFilter
+                keygroups[index].loudFilter = source.loudFilter
+                keygroups[index].keyFilter = source.keyFilter
+            case .envelopes:
+                keygroups[index].envelope = source.envelope
+                keygroups[index].vcfEnvelope = source.vcfEnvelope
+                keygroups[index].vcfAmount = source.vcfAmount
+            case .tuningPlayback:
+                keygroups[index].softTuning = source.softTuning
+                keygroups[index].loudTuning = source.loudTuning
+                keygroups[index].constantPitch = source.constantPitch
+                keygroups[index].oneShot = source.oneShot
+                keygroups[index].lfoDepth = source.lfoDepth
+            case .velocity:
+                keygroups[index].velocitySensitivity = source.velocitySensitivity
+                keygroups[index].releaseVelocityFromNoteOn =
+                    source.releaseVelocityFromNoteOn
+            case .output:
+                keygroups[index].output = source.output
+                keygroups[index].midiChannelOffset = source.midiChannelOffset
+            case .keyVelocityMapping:
+                keygroups[index].lowKey = source.lowKey
+                keygroups[index].highKey = source.highKey
+                keygroups[index].velocityThreshold = source.velocityThreshold
+                keygroups[index].velocityCrossfade = source.velocityCrossfade
+                keygroups[index].customVelocityCrossfadePoint =
+                    source.customVelocityCrossfadePoint
+                keygroups[index].velocityCrossfadePoint = source.velocityCrossfadePoint
+            }
+        }
     }
 
     /// Reorders complete native keygroup records while retaining unknown bytes
@@ -726,6 +823,12 @@ struct P9Program: Equatable {
         }
     }
 
+    private mutating func reindexKeygroups() {
+        for index in keygroups.indices {
+            keygroups[index].id = index
+        }
+    }
+
     mutating func apply(_ edits: P9BulkEdits, to indexes: Set<Int>) {
         for index in indexes.sorted() where keygroups.indices.contains(index) {
             edits.apply(to: &keygroups[index])
@@ -775,13 +878,29 @@ enum P9NumericInput {
     static func draggedValue(
         from startingValue: Int,
         verticalTranslation: CGFloat,
-        range: ClosedRange<Int>
+        range: ClosedRange<Int>,
+        pointsPerStep: CGFloat = 2,
+        stepMultiplier: Int = 1
     ) -> Int {
-        let pointsPerStep: CGFloat = 2
-        let stepChange = Int((-verticalTranslation / pointsPerStep).rounded())
+        let safePointsPerStep = max(0.25, pointsPerStep)
+        let stepChange = Int((-verticalTranslation / safePointsPerStep).rounded())
+            * max(1, stepMultiplier)
         return max(
             range.lowerBound,
             min(range.upperBound, startingValue + stepChange)
+        )
+    }
+
+    static func incrementedValue(
+        from value: Int,
+        direction: Int,
+        range: ClosedRange<Int>,
+        coarse: Bool
+    ) -> Int {
+        let step = coarse ? 10 : 1
+        return max(
+            range.lowerBound,
+            min(range.upperBound, value + (direction < 0 ? -step : step))
         )
     }
 }
