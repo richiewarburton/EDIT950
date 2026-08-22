@@ -1693,6 +1693,38 @@ struct InteractionRegressionRunner {
             }
             print("✓ Stale editor drafts cannot overwrite an imported first keygroup")
 
+            let recoveryDirectory = workspace.appendingPathComponent(
+                "p9-recovery",
+                isDirectory: true
+            )
+            let recoverySourceURL = workspace.appendingPathComponent("RECOVERY.P9")
+            let recoverySourceData = try P9Program.blank(named: "RECOVERY").encoded()
+            let recoveryDocument = try P9EditorDocument(
+                data: recoverySourceData,
+                source: .local(recoverySourceURL),
+                recoveryDirectory: recoveryDirectory
+            )
+            recoveryDocument.performEdit(actionName: "Edit Release") {
+                $0.keygroups[0].envelope.release = 73
+            }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            let recoveryJournalURL = try P9RecoveryJournal.journalURL(
+                sourceIdentity: recoveryDocument.source.recoveryIdentity,
+                directory: recoveryDirectory
+            )
+            guard FileManager.default.fileExists(atPath: recoveryJournalURL.path) else {
+                throw RegressionFailure(
+                    "An unsaved P9 edit did not create its recovery journal."
+                )
+            }
+            recoveryDocument.discardUnsavedChanges()
+            guard !FileManager.default.fileExists(atPath: recoveryJournalURL.path) else {
+                throw RegressionFailure(
+                    "Close Without Saving left a discarded recovery journal behind."
+                )
+            }
+            print("✓ Close Without Saving removes its recovery journal immediately")
+
             let newProgram = try model.prepareBlankP9Program(named: "test_space")
             guard newProgram.program.keygroups.count == 1,
                   newProgram.program.name == "TEST SPACE",
@@ -1702,6 +1734,39 @@ struct InteractionRegressionRunner {
                     "A new program did not canonicalize once or start with exactly one blank keygroup."
                 )
             }
+            newProgram.undoManager = undoManager
+            undoManager.removeAllActions()
+            let originalFilter = newProgram.program.keygroups[0].softFilter
+            newProgram.beginContinuousEdit(actionName: "Set Soft Filter")
+            for value in [31, 47, 63] {
+                newProgram.performEdit(actionName: "Set Soft Filter") { program in
+                    program.keygroups[0].softFilter = value
+                }
+            }
+            newProgram.endContinuousEdit()
+            guard newProgram.program.keygroups[0].softFilter == 63,
+                  undoManager.canUndo,
+                  undoManager.undoActionName == "Set Soft Filter"
+            else {
+                throw RegressionFailure(
+                    "A continuous keygroup gesture did not register as one named Undo step."
+                )
+            }
+            undoManager.undo()
+            guard newProgram.program.keygroups[0].softFilter == originalFilter,
+                  undoManager.canRedo
+            else {
+                throw RegressionFailure(
+                    "Undo did not restore the pre-gesture in-memory P9 state."
+                )
+            }
+            undoManager.redo()
+            guard newProgram.program.keygroups[0].softFilter == 63 else {
+                throw RegressionFailure(
+                    "Redo did not restore the completed in-memory P9 gesture."
+                )
+            }
+            print("✓ Continuous keygroup edits collapse to one in-memory Undo/Redo step")
             var editedProgram = newProgram.program
             editedProgram.keygroups[0].softSampleName = sampleName
             editedProgram.keygroups[0].lowKey = 60
@@ -1710,7 +1775,7 @@ struct InteractionRegressionRunner {
             editedProgram.keygroups[duplicate].lowKey = 61
             editedProgram.keygroups[duplicate].highKey = 61
             try editedProgram.deleteKeygroups(at: [0])
-            newProgram.program = editedProgram
+            newProgram.replaceProgram(with: editedProgram)
 
             try await model.performCreateP9InImage(newProgram)
             guard newProgram.source.isExistingImageProgram,
@@ -1732,6 +1797,24 @@ struct InteractionRegressionRunner {
                     "Keygroup creation/deletion did not survive the verified P9 round trip."
                 )
             }
+            guard undoManager.canUndo else {
+                throw RegressionFailure(
+                    "Saving the P9 discarded its in-memory Undo history."
+                )
+            }
+            undoManager.undo()
+            guard newProgram.hasUnwrittenChanges, undoManager.canRedo else {
+                throw RegressionFailure(
+                    "Undoing past the P9 save marker did not make the session dirty."
+                )
+            }
+            undoManager.redo()
+            guard !newProgram.hasUnwrittenChanges else {
+                throw RegressionFailure(
+                    "Redoing to the saved P9 state did not restore the clean marker."
+                )
+            }
+            print("✓ P9 Save retains Undo history and its clean-state marker")
             model.selection = [storedProgram.id]
             print("✓ Sample choices come from the current S950 volume")
             print("✓ Canonicalized an underscored P9 name once and byte-verified it after keygroup add/delete")
