@@ -30,23 +30,19 @@ This is for people who:
 You do **not** need an S900 or S950. EDIT950 works with disk-image files and never
 formats or writes a physical drive.
 
-Current source version: **1.8.48 (build 69)**. Requires macOS 14 or later.
+Current source version: **1.8.49 (build 72)**. Requires macOS 14 or later.
 
-### What is new in 1.8.48
+### What is new in 1.8.49
 
-- Select any combination of P9 keygroups and edit shared or **Mixed** values
-  directly. Exact typed, dragged, stepped and chosen values apply immediately
-  to the complete selection.
-- Undo or redo whole gestures and structural operations, duplicate an ordered
-  keygroup block, and copy whole keygroups or named parameter groups.
-- Keep edits in memory until explicit Save, recover interrupted work from a
-  source-bound journal, and write IMG-backed P9s through a byte-verified staging
-  image followed by atomic replacement.
-- Open the exact P9 selected in PLAY950 and audition validated in-memory edits
-  in that private plug-in instance without writing the IMG or rebuilding its
-  linked sample data.
+- Open a selected S9 directly in SAMPLETOOLS with no EDIT950 sheet competing
+  for attention.
+- Receive the contextual **Return to EDIT950** action into a compact original /
+  returned A/B review with Replace, Save As New, Review Settings and Cancel.
+- Identify returns with a unique round-trip directory token rather than the
+  sample name alone, while keeping unrelated WAV opens on the normal import path.
+- Present the inspector actions as aligned full-width and two-column groups.
 
-See [the complete 1.8.48 release notes](ReleaseDocs/RELEASE_NOTES_1.8.48.md)
+See [the complete 1.8.49 release notes](ReleaseDocs/RELEASE_NOTES_1.8.49.md)
 for every fix and validation result.
 
 ![EDIT950 browsing a native S950 disk image](Documentation/Images/edit950-browser.png)
@@ -134,6 +130,8 @@ the index portable, but tags should not be edited on multiple Macs at once.
 - Inspect sample rate, root pitch, loudness, playback direction, compression and
   loop points.
 - Import compatible mono PCM WAV files back as native S9 content.
+- Send one S9 to SAMPLETOOLS and receive its exported output back into the
+  existing reviewed, backed-up and byte-verified sample replacement workflow.
 - Reduce S950 Audio Bandwidth with clean anti-aliased or deliberately raw
   conversion while preserving pitch, duration and scaled loops.
 

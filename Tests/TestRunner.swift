@@ -833,7 +833,7 @@ struct TestRunner {
             )
         }
 
-        test("Finder associations cover IMG, P9 and S9 without claiming ISO") {
+        test("Finder associations and SAMPLETOOLS handoff declarations are complete") {
             try expect(
                 AkaiFileAssociation.allCases.map(\.filenameExtension)
                     == ["IMG", "P9", "S9"]
@@ -874,6 +874,52 @@ struct TestRunner {
                 (imgDeclaration?["CFBundleTypeExtensions"] as? [String])
                     == ["img", "IMG"]
             )
+            let wavDeclaration = documentTypes.first { documentType in
+                (documentType["LSItemContentTypes"] as? [String])
+                    == ["com.microsoft.waveform-audio"]
+            }
+            try expect(
+                (wavDeclaration?["CFBundleTypeExtensions"] as? [String])
+                    == ["wav", "WAV"]
+            )
+            try expect(
+                wavDeclaration?["CFBundleTypeRole"] as? String == "Editor"
+            )
+            try expect(
+                SAMPLETOOLSInterop.bundleIdentifier
+                    == "com.e45recordings.SAMPLETOOLS"
+            )
+            let roundTripIdentifier = UUID()
+            let roundTripDirectory = URL(fileURLWithPath: "/tmp")
+                .appendingPathComponent(
+                    SAMPLETOOLSInterop.roundTripDirectoryName(
+                        for: roundTripIdentifier
+                    ),
+                    isDirectory: true
+                )
+            try expect(SAMPLETOOLSInterop.isExpectedReturn(
+                roundTripDirectory.appendingPathComponent(
+                    "HAND FULL_OUTPUT.wav"
+                ),
+                roundTripIdentifier: roundTripIdentifier
+            ))
+            try expect(!SAMPLETOOLSInterop.isExpectedReturn(
+                URL(fileURLWithPath: "/tmp/HAND FULL_OUTPUT.wav"),
+                roundTripIdentifier: roundTripIdentifier
+            ))
+            try expect(!SAMPLETOOLSInterop.isExpectedReturn(
+                roundTripDirectory.appendingPathComponent("HAND FULL.wav"),
+                roundTripIdentifier: roundTripIdentifier
+            ))
+            let sampletoolsBadge = URL(
+                fileURLWithPath: FileManager.default.currentDirectoryPath
+            ).appendingPathComponent(
+                "Resources/BrandAssets/launcher-SAMPLETOOLS.png"
+            )
+            guard let badgeImage = NSImage(contentsOf: sampletoolsBadge) else {
+                throw TestFailure.expectation
+            }
+            try expect(badgeImage.size.width > 0 && badgeImage.size.height > 0)
         }
 
         test("P9 programs round-trip without changing any unknown bytes") {

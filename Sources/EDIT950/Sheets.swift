@@ -675,6 +675,575 @@ private enum SampleEditWorkflowPage: Int, CaseIterable, Identifiable {
     }
 }
 
+struct SampleEditPresentationSheet: View {
+    @ObservedObject var editSession: ExternalSampleEditSession
+    @State private var showingDetailedEditor: Bool
+
+    init(editSession: ExternalSampleEditSession) {
+        self.editSession = editSession
+        _showingDetailedEditor = State(
+            initialValue: !editSession.isSAMPLETOOLSRoundTrip
+                || editSession.returnRevision == 0
+        )
+    }
+
+    var body: some View {
+        if showingDetailedEditor {
+            ExternalSampleEditSheet(editSession: editSession)
+        } else {
+            SAMPLETOOLSReturnReviewSheet(
+                editSession: editSession,
+                onReviewSettings: {
+                    showingDetailedEditor = true
+                }
+            )
+        }
+    }
+}
+
+private enum SAMPLETOOLSComparisonSource {
+    case original
+    case returned
+}
+
+private struct SAMPLETOOLSReturnReviewSheet: View {
+    static let baseSize = CGSize(width: 680, height: 390)
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var editSession: ExternalSampleEditSession
+    @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var suitePreferences: SuitePreferences
+    let onReviewSettings: () -> Void
+
+    @StateObject private var audition = SampleLoopAuditionController()
+    @State private var activeAudition: SAMPLETOOLSComparisonSource?
+    @State private var createBackup = true
+    @State private var showReplaceConfirmation = false
+    @State private var showSaveAsNewPrompt = false
+    @State private var newSampleName = ""
+    @FocusState private var newSampleNameFocused: Bool
+
+    var body: some View {
+        ZStack {
+            VStack(spacing: 0) {
+                header
+                Divider().overlay(Color.suiteRule)
+                comparison
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider().overlay(Color.suiteRule)
+                footer
+            }
+            .frame(width: Self.baseSize.width, height: Self.baseSize.height)
+            .foregroundStyle(Color.suiteInk)
+            .background(Color.suiteBackground)
+
+            if showSaveAsNewPrompt {
+                saveAsNewOverlay
+            } else if showReplaceConfirmation {
+                replaceOverlay
+            }
+        }
+        .accessibilityIdentifier("sampletools-return-review")
+        .interactiveDismissDisabled(
+            editSession.isSaving
+                || showReplaceConfirmation
+                || showSaveAsNewPrompt
+        )
+        .onAppear {
+            audition.onPlaybackEnded = {
+                activeAudition = nil
+            }
+        }
+        .onChange(of: editSession.returnRevision) { _, _ in
+            audition.stop()
+            activeAudition = nil
+        }
+        .onDisappear {
+            audition.stop()
+        }
+        .onExitCommand {
+            if showSaveAsNewPrompt {
+                closeSaveAsNewPrompt()
+            } else if showReplaceConfirmation {
+                showReplaceConfirmation = false
+            } else {
+                cancel()
+            }
+        }
+        .scaleEffect(presentationScale, anchor: .topLeading)
+        .frame(
+            width: Self.baseSize.width * presentationScale,
+            height: Self.baseSize.height * presentationScale,
+            alignment: .topLeading
+        )
+    }
+
+    private var presentationScale: CGFloat {
+        CGFloat(suitePreferences.zoom.rawValue)
+    }
+
+    private var header: some View {
+        HStack(spacing: 11) {
+            SuiteLauncherLabel(
+                target: .sampletools,
+                title: "SAMPLE RETURNED",
+                iconSize: 34
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                Text(editSession.sourceFile.name)
+                    .font(SuiteFont.medium(12))
+                    .lineLimit(1)
+                Text("COMPARE BEFORE WRITING TO THE IMG")
+                    .font(SuiteFont.regular(8))
+                    .tracking(1.0)
+                    .foregroundStyle(Color.suiteUnit)
+            }
+            Spacer()
+            Label("IMG UNCHANGED", systemImage: "checkmark.shield")
+                .font(SuiteFont.medium(9))
+                .tracking(0.7)
+                .foregroundStyle(Color.suiteUnit)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 58)
+        .background(Color.suitePanel)
+    }
+
+    private var comparison: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                comparisonCard(
+                    title: "A · ORIGINAL",
+                    inspection: editSession.originalInspection,
+                    isReturned: false
+                )
+                Image(systemName: "arrow.right")
+                    .font(SuiteFont.medium(15))
+                    .foregroundStyle(Color.suiteUnit)
+                comparisonCard(
+                    title: "B · RETURNED",
+                    inspection: editSession.currentInspection,
+                    isReturned: true
+                )
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    toggleAudition(.original)
+                } label: {
+                    Label(
+                        activeAudition == .original && audition.isPlaying
+                            ? "STOP ORIGINAL"
+                            : "AUDITION ORIGINAL",
+                        systemImage: activeAudition == .original
+                            && audition.isPlaying ? "stop.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SuiteSecondaryButtonStyle())
+                .disabled(editSession.isSaving)
+                .accessibilityIdentifier("audition-original-sample")
+
+                Button {
+                    toggleAudition(.returned)
+                } label: {
+                    Label(
+                        activeAudition == .returned && audition.isPlaying
+                            ? "STOP RETURNED"
+                            : "AUDITION RETURNED",
+                        systemImage: activeAudition == .returned
+                            && audition.isPlaying ? "stop.fill" : "play.fill"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                .disabled(editSession.isSaving)
+                .accessibilityIdentifier("audition-returned-sample")
+            }
+
+            if let error = editSession.errorMessage ?? audition.errorMessage {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(SuiteFont.regular(9))
+                    .foregroundStyle(Color.suiteRed)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(
+                    "REPLACE PRESERVES THE ORIGINAL S9 NAME AND P9 REFERENCES · REVIEW SETTINGS OPENS LOOP, ROOT NOTE, COMPRESSION AND BANDWIDTH CONTROLS"
+                )
+                .font(SuiteFont.regular(8))
+                .tracking(0.55)
+                .foregroundStyle(Color.suiteUnit)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func comparisonCard(
+        title: String,
+        inspection: WAVInspection,
+        isReturned: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title)
+                .font(SuiteFont.medium(10))
+                .tracking(1.0)
+            comparisonValue(
+                "DURATION",
+                String(
+                    format: "%.3f SEC",
+                    Double(inspection.frameCount) / inspection.sampleRate
+                )
+            )
+            comparisonValue(
+                "SAMPLE RATE",
+                "\(Int(inspection.sampleRate.rounded()).formatted()) HZ"
+            )
+            comparisonValue(
+                "FORMAT",
+                "\(inspection.bitDepth)-BIT · "
+                    + (inspection.channelCount == 1
+                        ? "MONO" : "\(inspection.channelCount) CHANNELS")
+            )
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isReturned ? Color.suiteSlab2 : Color.suiteSlab)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(isReturned ? Color.suiteBlue : Color.suiteRule2)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func comparisonValue(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(SuiteFont.regular(8))
+                .tracking(0.7)
+                .foregroundStyle(Color.suiteUnit)
+            Spacer()
+            Text(value)
+                .font(SuiteFont.medium(9))
+                .monospacedDigit()
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if editSession.isSaving {
+                ProgressView()
+                    .controlSize(.small)
+                Text(model.progress?.detail ?? "PREPARING SAMPLE…")
+                    .font(SuiteFont.regular(8))
+                    .foregroundStyle(Color.suiteUnit)
+            }
+            Spacer()
+            Button("CANCEL") {
+                cancel()
+            }
+            .buttonStyle(SuiteSecondaryButtonStyle())
+            .disabled(editSession.isSaving)
+
+            Button("REVIEW SETTINGS…") {
+                audition.stop()
+                activeAudition = nil
+                editSession.errorMessage = nil
+                onReviewSettings()
+            }
+            .buttonStyle(SuiteSecondaryButtonStyle())
+            .disabled(editSession.isSaving)
+            .accessibilityIdentifier("review-sampletools-settings")
+
+            Button("SAVE AS NEW…") {
+                requestSaveAsNew()
+            }
+            .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+            .disabled(editSession.isSaving)
+            .accessibilityIdentifier("save-sampletools-return-as-new")
+
+            Button("REPLACE SAMPLE") {
+                audition.stop()
+                activeAudition = nil
+                editSession.errorMessage = nil
+                showReplaceConfirmation = true
+            }
+            .buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
+            .disabled(editSession.isSaving)
+            .accessibilityIdentifier("replace-sampletools-return")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 66)
+        .background(Color.suitePanel)
+    }
+
+    private var replaceOverlay: some View {
+        confirmationBackdrop {
+            VStack(alignment: .leading, spacing: 14) {
+                confirmationTitle(
+                    "REPLACE ORIGINAL SAMPLE",
+                    colour: Color.suiteRed
+                )
+                Text(
+                    "Replace \(editSession.sourceFile.name) with the returned SAMPLETOOLS output. EDIT950 will re-export and verify the stored S9 byte-for-byte."
+                )
+                .font(SuiteFont.regular(9))
+                .foregroundStyle(Color.suiteUnit)
+                .fixedSize(horizontal: false, vertical: true)
+                backupChoice
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("CANCEL") {
+                        showReplaceConfirmation = false
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    Button("REPLACE SAMPLE") {
+                        commitReplace()
+                    }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+        }
+    }
+
+    private var saveAsNewOverlay: some View {
+        confirmationBackdrop {
+            VStack(alignment: .leading, spacing: 14) {
+                confirmationTitle(
+                    "SAVE RETURNED SAMPLE AS NEW",
+                    colour: Color.suiteBlue
+                )
+                Text(
+                    "The original \(editSession.sourceFile.name) and all existing P9 references remain unchanged."
+                )
+                .font(SuiteFont.regular(9))
+                .foregroundStyle(Color.suiteUnit)
+                .fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("NEW S950 SAMPLE NAME")
+                        .font(SuiteFont.medium(8))
+                        .tracking(0.8)
+                        .foregroundStyle(Color.suiteLabel)
+                    TextField("Name", text: $newSampleName)
+                        .textFieldStyle(.plain)
+                        .font(SuiteFont.medium(12))
+                        .padding(.horizontal, 9)
+                        .frame(height: 32)
+                        .background(Color.suiteSlab2)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(
+                                    saveAsNewValidationError == nil
+                                        ? Color.suiteRule2 : Color.suiteRed
+                                )
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .focused($newSampleNameFocused)
+                        .onSubmit {
+                            if saveAsNewValidationError == nil {
+                                commitSaveAsNew()
+                            }
+                        }
+                    if let saveAsNewValidationError {
+                        Label(
+                            saveAsNewValidationError,
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(SuiteFont.regular(8))
+                        .foregroundStyle(Color.suiteRed)
+                    } else {
+                        Text("UP TO 10 CHARACTERS · A–Z, 0–9, _ OR -")
+                            .font(SuiteFont.regular(7))
+                            .tracking(0.55)
+                            .foregroundStyle(Color.suiteUnit)
+                    }
+                }
+                backupChoice
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("CANCEL") {
+                        closeSaveAsNewPrompt()
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    Button("SAVE AS NEW") {
+                        commitSaveAsNew()
+                    }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(saveAsNewValidationError != nil)
+                }
+            }
+        }
+    }
+
+    private func confirmationBackdrop<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        ZStack {
+            Color.black.opacity(0.55)
+                .contentShape(Rectangle())
+            content()
+                .padding(18)
+                .frame(width: 450)
+                .background(Color.suitePanel)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.suiteRule2)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .shadow(color: .black.opacity(0.45), radius: 22, y: 10)
+        }
+        .accessibilityAddTraits(.isModal)
+    }
+
+    private func confirmationTitle(_ title: String, colour: Color) -> some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(colour)
+                .frame(width: 4, height: 18)
+            Text(title)
+                .font(SuiteFont.medium(11))
+                .tracking(1.2)
+        }
+    }
+
+    private var backupChoice: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(
+                "CREATE AND VERIFY A COMPLETE IMG BACKUP FIRST",
+                isOn: $createBackup
+            )
+            .toggleStyle(.checkbox)
+            .font(SuiteFont.regular(9))
+            Text(
+                createBackup
+                    ? "A failed write or verification is restored automatically from the new backup."
+                    : "No backup will be created. Automatic rollback is unavailable after mutation begins."
+            )
+            .font(SuiteFont.regular(8))
+            .foregroundStyle(createBackup ? Color.suiteUnit : Color.suiteAmber)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(Color.suiteSlab)
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.suiteRule))
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var defaultAttributes: S9SampleEditSettings {
+        S9SampleEditSettings(attributes: editSession.originalAttributes)
+    }
+
+    private var suggestedNewSampleName: String {
+        let sourceBase = AkaiFilename.sanitizedBase(
+            editSession.sourceFile.name,
+            family: .s900,
+            maximumLength: 10
+        )
+        let existing = Set(model.availableSampleNames.map {
+            AkaiFilename.sanitizedBase(
+                $0,
+                family: .s900,
+                maximumLength: 10
+            ).uppercased()
+        })
+        return AkaiFilename.uniqueName(
+            base: sourceBase,
+            existing: existing,
+            maximumLength: 10
+        )
+    }
+
+    private var saveAsNewValidationError: String? {
+        if let validationError = AkaiFilename.s950BaseValidationError(
+            newSampleName
+        ) {
+            return validationError
+        }
+        let requestedKey = AkaiFilename.normalizedS950Base(newSampleName)
+            .replacingOccurrences(of: "_", with: " ")
+        let existingKeys = Set(model.availableSampleNames.map {
+            $0.uppercased().replacingOccurrences(of: "_", with: " ")
+        })
+        if existingKeys.contains(requestedKey) {
+            return "\(AkaiFilename.normalizedS950Base(newSampleName)).S9 already exists in this volume."
+        }
+        return nil
+    }
+
+    private func toggleAudition(_ source: SAMPLETOOLSComparisonSource) {
+        if activeAudition == source, audition.isPlaying {
+            audition.stop()
+            activeAudition = nil
+            return
+        }
+        audition.stop()
+        activeAudition = source
+        let url = source == .original
+            ? editSession.originalComparisonURL
+            : editSession.wavURL
+        audition.playOneShot(url: url)
+        if audition.errorMessage != nil {
+            activeAudition = nil
+        }
+    }
+
+    private func cancel() {
+        guard !editSession.isSaving else { return }
+        audition.stop()
+        activeAudition = nil
+        model.cancelExternalSampleEdit(editSession)
+        dismiss()
+    }
+
+    private func requestSaveAsNew() {
+        audition.stop()
+        activeAudition = nil
+        editSession.errorMessage = nil
+        newSampleName = suggestedNewSampleName
+        showSaveAsNewPrompt = true
+        Task { @MainActor in
+            newSampleNameFocused = true
+        }
+    }
+
+    private func closeSaveAsNewPrompt() {
+        newSampleNameFocused = false
+        showSaveAsNewPrompt = false
+    }
+
+    private func commitReplace() {
+        showReplaceConfirmation = false
+        model.replaceEditedS9Sample(
+            editSession,
+            compressed: settings.compressedS900,
+            createBackup: createBackup,
+            attributes: defaultAttributes,
+            loopPoints: nil,
+            bandwidthConversion: nil,
+            onSuccess: { dismiss() }
+        )
+    }
+
+    private func commitSaveAsNew() {
+        guard saveAsNewValidationError == nil else { return }
+        let requestedName = AkaiFilename.normalizedS950Base(newSampleName)
+        closeSaveAsNewPrompt()
+        model.saveEditedS9SampleAsNew(
+            editSession,
+            requestedName: requestedName,
+            compressed: settings.compressedS900,
+            createBackup: createBackup,
+            attributes: defaultAttributes,
+            loopPoints: nil,
+            bandwidthConversion: nil,
+            onSuccess: { dismiss() }
+        )
+    }
+}
+
 struct ExternalSampleEditSheet: View {
     static let baseSize = CGSize(width: 720, height: 420)
     static let saveAsNewActionTitle = "SAVE AS NEW…"
@@ -806,6 +1375,21 @@ struct ExternalSampleEditSheet: View {
         .onAppear {
             compressed = settings.compressedS900
             loadZeroCrossings()
+            if editSession.isSAMPLETOOLSRoundTrip,
+               editSession.returnRevision > 0 {
+                checkSavedMarkers(resetMissingToFullRange: true)
+            }
+        }
+        .onChange(of: editSession.returnRevision) { _, _ in
+            audition.stop()
+            previewGeneration = UUID()
+            if let convertedPreviewURL {
+                try? FileManager.default.removeItem(at: convertedPreviewURL)
+            }
+            convertedPreviewURL = nil
+            convertedPreviewFrameCount = nil
+            previewError = nil
+            checkSavedMarkers(resetMissingToFullRange: true)
         }
         .onChange(of: editAttributes.playbackMode) { oldValue, newValue in
             if oldValue != newValue, newValue.requiresLoopMarkers {
@@ -945,12 +1529,14 @@ struct ExternalSampleEditSheet: View {
                 compactValueRow("TEMPORARY FILE", editSession.wavURL.lastPathComponent)
                 compactValueRow(
                     "EXPORTED FORMAT",
-                    "\(Int(editSession.originalInspection.sampleRate)) Hz · "
-                        + "\(editSession.originalInspection.bitDepth)-bit · "
-                        + "\(editSession.originalInspection.channelCount == 1 ? "MONO" : "\(editSession.originalInspection.channelCount) CHANNELS")"
+                    "\(Int(editSession.currentInspection.sampleRate)) Hz · "
+                        + "\(editSession.currentInspection.bitDepth)-bit · "
+                        + "\(editSession.currentInspection.channelCount == 1 ? "MONO" : "\(editSession.currentInspection.channelCount) CHANNELS")"
                 )
                 Text(
-                    editSession.editorURL == nil
+                    editSession.isSAMPLETOOLSRoundTrip
+                        ? "The returned SAMPLETOOLS output is loaded. Replace, save as new, or adjust its S950 settings here."
+                    : editSession.editorURL == nil
                         ? "Native attributes remain available. Choose an audio editor in Settings to edit the WAV."
                         : "Save over this WAV in the external editor; do not move it or use Save As."
                 )
@@ -1035,7 +1621,7 @@ struct ExternalSampleEditSheet: View {
                 HStack(spacing: 10) {
                     compactMetric(
                         "SAMPLE",
-                        editSession.originalAttributes.sampleLength.formatted()
+                        editSession.currentInspection.frameCount.formatted()
                     )
                     compactMetric("LOOP", loopLength.formatted())
                 }
@@ -1585,6 +2171,9 @@ struct ExternalSampleEditSheet: View {
                         ?? zeroCrossingError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(Color.suiteRed)
+            } else if let status = editSession.roundTripStatus {
+                Label(status, systemImage: "arrow.uturn.backward.circle.fill")
+                    .foregroundStyle(Color.suiteBlue)
             } else {
                 Text("SOURCE IMG REMAINS UNCHANGED UNTIL THE FINAL SAVE STEP")
                     .foregroundStyle(Color.suiteUnit)
@@ -2064,7 +2653,7 @@ struct ExternalSampleEditSheet: View {
         }
     }
 
-    private func checkSavedMarkers() {
+    private func checkSavedMarkers(resetMissingToFullRange: Bool = false) {
         do {
             let markers = try WAVService.cueSampleOffsets(in: editSession.wavURL)
                 .sorted()
@@ -2074,6 +2663,15 @@ struct ExternalSampleEditSheet: View {
                 loopEnd = Int(markers[1])
                 loopPointsManuallyEdited = false
                 markerSummary = "Start \(markers[0]) · End \(markers[1])"
+                refreshAuditionIfPossible()
+            } else if resetMissingToFullRange,
+                      editSession.currentInspection.frameCount > 0,
+                      !editAttributes.playbackMode.requiresLoopMarkers {
+                loadZeroCrossings()
+                loopStart = 0
+                loopEnd = Int(editSession.currentInspection.frameCount)
+                loopPointsManuallyEdited = false
+                markerSummary = "No loop markers · full returned sample"
                 refreshAuditionIfPossible()
             } else {
                 markerSummary = "Found \(markers.count); exactly 2 are required"
@@ -2108,7 +2706,7 @@ struct ExternalSampleEditSheet: View {
     }
 
     private var loopValidationError: String? {
-        let length = Int(editSession.originalAttributes.sampleLength)
+        let length = Int(editSession.currentInspection.frameCount)
         guard loopStart >= 0, loopEnd >= 0 else {
             return "Loop positions cannot be negative."
         }
@@ -2273,7 +2871,9 @@ struct ExternalSampleEditSheet: View {
               let points = currentLoopPoints
         else { return nil }
         return try? points.scaled(
-            fromSampleLength: editSession.originalAttributes.sampleLength,
+            fromSampleLength: UInt32(
+                exactly: editSession.currentInspection.frameCount
+            ) ?? editSession.originalAttributes.sampleLength,
             toSampleLength: convertedPreviewFrameCount
         )
     }

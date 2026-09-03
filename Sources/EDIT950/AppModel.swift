@@ -15,8 +15,12 @@ final class ExternalSampleEditSession: ObservableObject, Identifiable {
     let originalInspection: WAVInspection
     let originalAttributes: S9SampleAttributes
     let workspace: TemporaryWorkspace
+    let sampletoolsRoundTripID: UUID?
     @Published var isSaving = false
     @Published var errorMessage: String?
+    @Published private(set) var currentInspection: WAVInspection
+    @Published private(set) var returnRevision = 0
+    @Published private(set) var roundTripStatus: String?
 
     init(
         sourceFile: AkaiFile,
@@ -27,7 +31,8 @@ final class ExternalSampleEditSession: ObservableObject, Identifiable {
         originalWAVData: Data,
         originalInspection: WAVInspection,
         originalAttributes: S9SampleAttributes,
-        workspace: TemporaryWorkspace
+        workspace: TemporaryWorkspace,
+        sampletoolsRoundTripID: UUID? = nil
     ) {
         self.sourceFile = sourceFile
         self.imageURL = imageURL
@@ -38,6 +43,16 @@ final class ExternalSampleEditSession: ObservableObject, Identifiable {
         self.originalInspection = originalInspection
         self.originalAttributes = originalAttributes
         self.workspace = workspace
+        self.sampletoolsRoundTripID = sampletoolsRoundTripID
+        currentInspection = originalInspection
+    }
+
+    var isSAMPLETOOLSRoundTrip: Bool {
+        sampletoolsRoundTripID != nil
+    }
+
+    var originalComparisonURL: URL {
+        workspace.url.appendingPathComponent("EDIT950-ORIGINAL.wav")
     }
 
     var sampleBaseName: String {
@@ -50,6 +65,21 @@ final class ExternalSampleEditSession: ObservableObject, Identifiable {
 
     func removeWorkspace() {
         workspace.remove()
+    }
+
+    func acceptSAMPLETOOLSReturn(
+        data: Data,
+        inspection: WAVInspection
+    ) throws {
+        if !FileManager.default.fileExists(atPath: originalComparisonURL.path) {
+            try originalWAVData.write(to: originalComparisonURL, options: .atomic)
+        }
+        try data.write(to: wavURL, options: .atomic)
+        currentInspection = inspection
+        returnRevision += 1
+        roundTripStatus =
+            "OUTPUT RECEIVED FROM SAMPLETOOLS · REVIEW, THEN REPLACE OR SAVE AS NEW"
+        errorMessage = nil
     }
 }
 
@@ -99,6 +129,7 @@ final class AppModel: ObservableObject {
         didSet { p9EditorDocument?.undoManager = undoManager }
     }
     @Published var externalSampleEditSession: ExternalSampleEditSession?
+    @Published private(set) var pendingSAMPLETOOLSRoundTrip: ExternalSampleEditSession?
     @Published var incompleteImageURL: URL?
     @Published var currentReadOnlyChoice = false
     @Published private(set) var headerNotice: HeaderNotice?
@@ -223,7 +254,12 @@ final class AppModel: ObservableObject {
     }
 
     var isBusy: Bool { operationActive }
-    var canMutate: Bool { session != nil && session?.readOnly == false && !isBusy }
+    var canMutate: Bool {
+        session != nil
+            && session?.readOnly == false
+            && !isBusy
+            && pendingSAMPLETOOLSRoundTrip == nil
+    }
     var canImport: Bool { canMutate && isS900Volume }
     var selectedFiles: [AkaiFile] { snapshot.files.filter { selection.contains($0.id) } }
     var displayedFiles: [AkaiFile] {
@@ -513,6 +549,7 @@ final class AppModel: ObservableObject {
             && isS900Volume
             && canMutate
             && externalSampleEditSession == nil
+            && pendingSAMPLETOOLSRoundTrip == nil
     }
     var isS900Volume: Bool {
         let normalized = snapshot.rawDInfo
@@ -767,6 +804,29 @@ final class AppModel: ObservableObject {
 
     func handleOpenURLs(_ urls: [URL]) {
         guard let first = urls.first else { return }
+        let sampletoolsSession = pendingSAMPLETOOLSRoundTrip
+            ?? externalSampleEditSession.flatMap {
+                $0.isSAMPLETOOLSRoundTrip ? $0 : nil
+            }
+        if urls.count == 1,
+           let editSession = sampletoolsSession,
+           let roundTripIdentifier = editSession.sampletoolsRoundTripID,
+           SAMPLETOOLSInterop.isExpectedReturn(
+               first,
+               roundTripIdentifier: roundTripIdentifier
+           ) {
+            acceptSAMPLETOOLSReturn(first, for: editSession)
+            return
+        }
+        if urls.count == 1,
+           SAMPLETOOLSInterop.roundTripIdentifier(in: first) != nil {
+            reportError(
+                AppError.verificationFailed(
+                    "This SAMPLETOOLS return no longer has an active EDIT950 round trip. The IMG was not changed. Start again from Edit in SAMPLETOOLS."
+                )
+            )
+            return
+        }
         if urls.count == 1,
            first.pathExtension.caseInsensitiveCompare(
                P9LiveEditSessionRequest.fileExtension
@@ -3001,6 +3061,8 @@ final class AppModel: ObservableObject {
     private func discardExternalSampleEditSession() {
         externalSampleEditSession?.removeWorkspace()
         externalSampleEditSession = nil
+        pendingSAMPLETOOLSRoundTrip?.removeWorkspace()
+        pendingSAMPLETOOLSRoundTrip = nil
     }
 
     private func discardSampleAuditionCache() {
@@ -3986,10 +4048,115 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func sendSelectedSampleToSAMPLETOOLS() {
+        guard canEditSelectedS9Sample, let file = selectedFiles.first else {
+            return
+        }
+        guard let applicationURL = SAMPLETOOLSInterop.installedApplicationURL()
+        else {
+            reportError(
+                AppError.companionUnavailable(
+                    "SAMPLETOOLS is not installed. Install it in Applications, then try again."
+                )
+            )
+            return
+        }
+        let roundTripIdentifier = UUID()
+        start {
+            try await self.prepareExternalSampleEdit(
+                file: file,
+                editorURL: applicationURL,
+                launchEditor: true,
+                sampletoolsRoundTripID: roundTripIdentifier,
+                presentEditor: false
+            )
+        }
+    }
+
+    private func acceptSAMPLETOOLSReturn(
+        _ returnedURL: URL,
+        for editSession: ExternalSampleEditSession
+    ) {
+        start {
+            let expectedSessionID = editSession.id
+            self.progress = OperationProgress(
+                kind: .editingSample,
+                current: 0,
+                total: 2,
+                detail: "Validating SAMPLETOOLS output"
+            )
+            let options = ImportOptions(
+                family: .s900,
+                compressedS900: self.settings.compressedS900,
+                convertToMono: true,
+                preserveSampleRate: true,
+                collisionPolicy: .replace
+            )
+            let returned = try await Task.detached(priority: .userInitiated) {
+                let data = try Data(contentsOf: returnedURL)
+                let validationURL = FileManager.default.temporaryDirectory
+                    .appendingPathComponent(
+                        "edit950-sampletools-return-\(UUID().uuidString).wav"
+                    )
+                defer { try? FileManager.default.removeItem(at: validationURL) }
+                try data.write(to: validationURL, options: .atomic)
+                let inspection = try WAVService.inspect(
+                    validationURL,
+                    options: options
+                )
+                guard inspection.frameCount > 0 else {
+                    throw AppError.unsupportedWAV(
+                        "SAMPLETOOLS returned an empty WAV file."
+                    )
+                }
+                return (data, inspection)
+            }.value
+            let wasPending = self.pendingSAMPLETOOLSRoundTrip?.id
+                == expectedSessionID
+            let wasPresented = self.externalSampleEditSession?.id
+                == expectedSessionID
+            guard wasPending || wasPresented else {
+                throw AppError.verificationFailed(
+                    "The SAMPLETOOLS output arrived after its EDIT950 sample session was closed. The IMG was not changed."
+                )
+            }
+            try editSession.acceptSAMPLETOOLSReturn(
+                data: returned.0,
+                inspection: WAVInspection(
+                    url: editSession.wavURL,
+                    codecDescription: returned.1.codecDescription,
+                    sampleRate: returned.1.sampleRate,
+                    frameCount: returned.1.frameCount,
+                    cueSampleOffsets: returned.1.cueSampleOffsets,
+                    channelCount: returned.1.channelCount,
+                    bitDepth: returned.1.bitDepth,
+                    isLinearPCM: returned.1.isLinearPCM,
+                    needsRepair: returned.1.needsRepair,
+                    repairReasons: returned.1.repairReasons
+                )
+            )
+            if wasPending {
+                self.pendingSAMPLETOOLSRoundTrip = nil
+                self.externalSampleEditSession = editSession
+            }
+            self.updateProgress(2, detail: "SAMPLETOOLS output ready")
+            self.progress = nil
+            self.publishSuccess(
+                title: "Sample Returned from SAMPLETOOLS",
+                lines: [
+                    returnedURL.lastPathComponent,
+                    "Compare the original and returned WAV, then replace, save as new, or review settings."
+                ]
+            )
+        }
+    }
+
     func prepareExternalSampleEdit(
         file: AkaiFile,
         editorURL: URL?,
-        launchEditor: Bool = false
+        launchEditor: Bool = false,
+        sampletoolsRoundTripID: UUID? = nil,
+        presentEditor: Bool = true
     ) async throws {
         guard let activeSession = session else { throw AppError.noImageOpen }
         diagnostics.record(
@@ -4042,7 +4209,7 @@ final class AppModel: ObservableObject {
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
         ).filter { $0.pathExtension.caseInsensitiveCompare("wav") == .orderedSame }
-        guard let wavURL = exports.first else {
+        guard var wavURL = exports.first else {
             throw AppError.verificationFailed(
                 "AKAI Util did not export \(file.name) as a WAV file."
             )
@@ -4071,6 +4238,27 @@ final class AppModel: ObservableObject {
             )
             originalWAVData = try Data(contentsOf: wavURL)
         }
+        if let sampletoolsRoundTripID {
+            let roundTripDirectory = workspace.url.appendingPathComponent(
+                SAMPLETOOLSInterop.roundTripDirectoryName(
+                    for: sampletoolsRoundTripID
+                ),
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: roundTripDirectory,
+                withIntermediateDirectories: true
+            )
+            let roundTripWAVURL = roundTripDirectory.appendingPathComponent(
+                wavURL.lastPathComponent
+            )
+            try FileManager.default.moveItem(at: wavURL, to: roundTripWAVURL)
+            wavURL = roundTripWAVURL
+            inspection = try WAVService.inspect(
+                wavURL,
+                options: inspectionOptions
+            )
+        }
         let editSession = ExternalSampleEditSession(
             sourceFile: file,
             imageURL: activeSession.imageURL,
@@ -4080,17 +4268,24 @@ final class AppModel: ObservableObject {
             originalWAVData: originalWAVData,
             originalInspection: inspection,
             originalAttributes: originalAttributes,
-            workspace: workspace
+            workspace: workspace,
+            sampletoolsRoundTripID: sampletoolsRoundTripID
         )
         updateProgress(1, detail: "Preparing sample editor")
         if launchEditor {
             try await openEditedWAV(editSession)
         }
-        externalSampleEditSession = editSession
+        if presentEditor {
+            externalSampleEditSession = editSession
+        } else {
+            pendingSAMPLETOOLSRoundTrip = editSession
+        }
         diagnostics.record(
             .info,
             category: "sample-edit",
-            message: "Sample editor presented",
+            message: presentEditor
+                ? "Sample editor presented"
+                : "SAMPLETOOLS round trip started",
             fields: [
                 "sample": file.name,
                 "session": editSession.id.uuidString,
@@ -4100,15 +4295,25 @@ final class AppModel: ObservableObject {
         )
         retained = true
         updateProgress(2, detail: "Ready for editing")
-        publishSuccess(
-            title: "Sample Opened for Editing",
-            lines: [
-                "\(file.name) was exported as \(wavURL.lastPathComponent).",
-                editorURL.map {
-                    "Use Open WAV in \($0.deletingPathExtension().lastPathComponent) if audio editing is required."
-                } ?? "Native S9 attributes can be edited without configuring an external audio editor."
-            ]
-        )
+        if presentEditor {
+            publishSuccess(
+                title: "Sample Opened for Editing",
+                lines: [
+                    "\(file.name) was exported as \(wavURL.lastPathComponent).",
+                    editorURL.map {
+                        "Use Open WAV in \($0.deletingPathExtension().lastPathComponent) if audio editing is required."
+                    } ?? "Native S9 attributes can be edited without configuring an external audio editor."
+                ]
+            )
+        } else {
+            publishSuccess(
+                title: "Editing in SAMPLETOOLS",
+                lines: [
+                    "\(file.name) is open in SAMPLETOOLS.",
+                    "Choose Return to EDIT950 there when the output is ready. The IMG remains unchanged."
+                ]
+            )
+        }
         progress = nil
     }
 
@@ -4131,10 +4336,10 @@ final class AppModel: ObservableObject {
             if let loopPoints {
                 let wavPoints = try Self.wavLoopMarkerOffsets(
                     loopPoints,
-                    nativeSampleLength:
-                        editSession.originalAttributes.sampleLength,
-                    wavFrameCount:
-                        editSession.originalInspection.frameCount
+                    nativeSampleLength: UInt32(
+                        exactly: editSession.currentInspection.frameCount
+                    ) ?? editSession.originalAttributes.sampleLength,
+                    wavFrameCount: editSession.currentInspection.frameCount
                 )
                 try WAVService.replaceCueSampleOffsets(
                     [wavPoints.start, wavPoints.end],
@@ -4184,6 +4389,9 @@ final class AppModel: ObservableObject {
         )
         if externalSampleEditSession?.id == editSession.id {
             externalSampleEditSession = nil
+        }
+        if pendingSAMPLETOOLSRoundTrip?.id == editSession.id {
+            pendingSAMPLETOOLSRoundTrip = nil
         }
         editSession.removeWorkspace()
         publishSuccess(
@@ -4953,8 +5161,9 @@ final class AppModel: ObservableObject {
                     )
                 }
                 scaledLoopPoints = try nativeLoopPoints.scaled(
-                    fromSampleLength:
-                        editSession.originalAttributes.sampleLength,
+                    fromSampleLength: UInt32(
+                        exactly: editSession.currentInspection.frameCount
+                    ) ?? editSession.originalAttributes.sampleLength,
                     toSampleLength: convertedFrameCount
                 )
             }

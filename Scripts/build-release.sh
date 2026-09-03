@@ -61,6 +61,7 @@ cp Resources/Licenses/JetBrainsMono-OFL-1.1.txt "$LICENCES_DIR/"
 cp Resources/BrandAssets/EDIT950-brand-mark.png "$BRAND_ASSETS_DIR/"
 cp Resources/BrandAssets/launcher-FIND950.png "$BRAND_ASSETS_DIR/"
 cp Resources/BrandAssets/launcher-PLAY950.png "$BRAND_ASSETS_DIR/"
+cp Resources/BrandAssets/launcher-SAMPLETOOLS.png "$BRAND_ASSETS_DIR/"
 cp Sources/EDIT950/Resources/AKAI-S950-Sampler-Template.adg \
   "$RESOURCES_DIR/AKAI-S950-Sampler-Template.adg"
 "$PROJECT_DIR/Scripts/build-akaiutil-universal.sh" "$RESOURCES_DIR/akaiutil"

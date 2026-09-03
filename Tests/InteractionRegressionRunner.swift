@@ -1294,6 +1294,17 @@ struct InteractionRegressionRunner {
                 )
             }
 
+            var returnedData = labelledMarkerData
+            try replaceFirstPCMSample(in: &returnedData, with: 12_345)
+            try returnedData.write(to: editSession.wavURL, options: .atomic)
+            guard try Data(contentsOf: editSession.wavURL) == returnedData
+            else {
+                throw RegressionFailure(
+                    "The external editor's private WAV change was not retained."
+                )
+            }
+            print("✓ External editor changes remain isolated in the private WAV until confirmation")
+
             try await model.exportNativeFiles(
                 [program],
                 to: programBeforeNewSampleDirectory,
@@ -1575,6 +1586,245 @@ struct InteractionRegressionRunner {
                 )
             }
             print("✓ Replacing an unchanged S9 closes the editor and reports that nothing was written")
+
+            let roundTripIdentifier = UUID()
+            let imageBeforeSAMPLETOOLSRoundTrip = try Data(contentsOf: image)
+            try await model.prepareExternalSampleEdit(
+                file: replacedEditedSample,
+                editorURL: audioEditor,
+                launchEditor: false,
+                sampletoolsRoundTripID: roundTripIdentifier,
+                presentEditor: false
+            )
+            guard let pendingRoundTrip = model.pendingSAMPLETOOLSRoundTrip,
+                  pendingRoundTrip.sampletoolsRoundTripID
+                    == roundTripIdentifier,
+                  model.externalSampleEditSession == nil,
+                  window.attachedSheet == nil,
+                  !model.canMutate,
+                  SAMPLETOOLSInterop.roundTripIdentifier(
+                    in: pendingRoundTrip.wavURL
+                  ) == roundTripIdentifier,
+                  try Data(contentsOf: image)
+                    == imageBeforeSAMPLETOOLSRoundTrip
+            else {
+                throw RegressionFailure(
+                    "Sending to SAMPLETOOLS presented EDIT950's editor or changed the IMG before a return."
+                )
+            }
+            print("✓ Sending to SAMPLETOOLS opens no EDIT950 sample sheet and leaves the IMG unchanged")
+
+            let sampletoolsReturnDirectory = workspace.appendingPathComponent(
+                SAMPLETOOLSInterop.roundTripDirectoryName(
+                    for: roundTripIdentifier
+                ),
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: sampletoolsReturnDirectory,
+                withIntermediateDirectories: true
+            )
+            let sampletoolsReturn = sampletoolsReturnDirectory
+                .appendingPathComponent(
+                    pendingRoundTrip.wavURL.deletingPathExtension()
+                        .lastPathComponent
+                        + SAMPLETOOLSInterop.outputSuffix + ".wav"
+                )
+            var sampletoolsReturnedData = pendingRoundTrip.originalWAVData
+            try replaceFirstPCMSample(
+                in: &sampletoolsReturnedData,
+                with: -12_345
+            )
+            try sampletoolsReturnedData.write(
+                to: sampletoolsReturn,
+                options: .atomic
+            )
+            model.handleOpenURLs([sampletoolsReturn])
+            for _ in 0..<100 where model.operationActive {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            for _ in 0..<40 where window.attachedSheet == nil {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard model.pendingSAMPLETOOLSRoundTrip == nil,
+                  model.externalSampleEditSession?.id
+                    == pendingRoundTrip.id,
+                  pendingRoundTrip.returnRevision == 1,
+                  pendingRoundTrip.roundTripStatus?.contains(
+                    "OUTPUT RECEIVED FROM SAMPLETOOLS"
+                  ) == true,
+                  try Data(contentsOf: pendingRoundTrip.wavURL)
+                    == sampletoolsReturnedData,
+                  try Data(contentsOf: pendingRoundTrip.originalComparisonURL)
+                    == pendingRoundTrip.originalWAVData,
+                  try Data(contentsOf: image)
+                    == imageBeforeSAMPLETOOLSRoundTrip,
+                  !model.showImportSheet,
+                  model.pendingImportURLs.isEmpty,
+                  window.attachedSheet != nil
+            else {
+                throw RegressionFailure(
+                    "The identified SAMPLETOOLS output did not open the compact return review safely."
+                )
+            }
+            let returnReviewRoot = SampleEditPresentationSheet(
+                editSession: pendingRoundTrip
+            )
+                .environmentObject(model)
+                .environmentObject(settings)
+                .environmentObject(suitePreferences)
+                .frame(width: 680, height: 390)
+            let returnSheetContent = NSHostingView(
+                rootView: returnReviewRoot
+            )
+            returnSheetContent.frame = NSRect(
+                x: 0,
+                y: 0,
+                width: 680,
+                height: 390
+            )
+            let returnReviewWindow = NSWindow(
+                contentRect: returnSheetContent.frame,
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: false
+            )
+            returnReviewWindow.contentView = returnSheetContent
+            returnReviewWindow.orderFront(nil)
+            for _ in 0..<10 {
+                returnSheetContent.layoutSubtreeIfNeeded()
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            let returnSheetBounds = returnSheetContent.bounds
+            guard let bitmap = returnSheetContent
+                .bitmapImageRepForCachingDisplay(in: returnSheetBounds)
+            else {
+                throw RegressionFailure(
+                    "The compact SAMPLETOOLS return review could not be rendered."
+                )
+            }
+            returnSheetContent.cacheDisplay(
+                in: returnSheetBounds,
+                to: bitmap
+            )
+            guard let returnSheetPNG = bitmap.representation(
+                using: .png,
+                properties: [:]
+            ), returnSheetPNG.count > 10_000 else {
+                throw RegressionFailure(
+                    "The compact SAMPLETOOLS return review rendered empty."
+                )
+            }
+            try returnSheetPNG.write(
+                to: URL(
+                    fileURLWithPath:
+                        "/tmp/EDIT950-sampletools-return-review.png"
+                ),
+                options: .atomic
+            )
+            returnReviewWindow.close()
+            print("✓ SAMPLETOOLS return opens compact original/returned A/B review with all safe decisions")
+            model.cancelExternalSampleEdit(pendingRoundTrip)
+            for _ in 0..<40 where window.attachedSheet != nil {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard window.attachedSheet == nil,
+                  try Data(contentsOf: image)
+                    == imageBeforeSAMPLETOOLSRoundTrip
+            else {
+                throw RegressionFailure(
+                    "Cancelling the SAMPLETOOLS return review changed the IMG or left its sheet open."
+                )
+            }
+            print("✓ Cancelling the SAMPLETOOLS return removes only temporary files")
+
+            let replacementRoundTripIdentifier = UUID()
+            let imageBeforeSAMPLETOOLSReplace = try Data(contentsOf: image)
+            try await model.prepareExternalSampleEdit(
+                file: replacedEditedSample,
+                editorURL: audioEditor,
+                launchEditor: false,
+                sampletoolsRoundTripID: replacementRoundTripIdentifier,
+                presentEditor: false
+            )
+            guard let replacementRoundTrip = model.pendingSAMPLETOOLSRoundTrip
+            else {
+                throw RegressionFailure(
+                    "A second SAMPLETOOLS round trip could not be prepared for replacement."
+                )
+            }
+            let replacementReturnDirectory = workspace.appendingPathComponent(
+                SAMPLETOOLSInterop.roundTripDirectoryName(
+                    for: replacementRoundTripIdentifier
+                ),
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(
+                at: replacementReturnDirectory,
+                withIntermediateDirectories: true
+            )
+            let replacementReturn = replacementReturnDirectory
+                .appendingPathComponent(
+                    replacementRoundTrip.wavURL.deletingPathExtension()
+                        .lastPathComponent
+                        + SAMPLETOOLSInterop.outputSuffix + ".wav"
+                )
+            var replacementReturnedData = replacementRoundTrip.originalWAVData
+            try replaceFirstPCMSample(
+                in: &replacementReturnedData,
+                with: -25_000
+            )
+            try replacementReturnedData.write(
+                to: replacementReturn,
+                options: .atomic
+            )
+            model.handleOpenURLs([replacementReturn])
+            for _ in 0..<100 where model.operationActive {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard model.externalSampleEditSession?.id
+                    == replacementRoundTrip.id,
+                  try model.editedS9HasChanges(
+                    replacementRoundTrip,
+                    attributes: S9SampleEditSettings(
+                        attributes: replacementRoundTrip.originalAttributes
+                    ),
+                    loopPoints: nil,
+                    bandwidthConversion: nil
+                  )
+            else {
+                throw RegressionFailure(
+                    "The returned SAMPLETOOLS output was not ready for replacement."
+                )
+            }
+            var sampletoolsReplacementCompleted = false
+            model.replaceEditedS9Sample(
+                replacementRoundTrip,
+                compressed: false,
+                createBackup: true,
+                attributes: S9SampleEditSettings(
+                    attributes: replacementRoundTrip.originalAttributes
+                ),
+                onSuccess: { sampletoolsReplacementCompleted = true }
+            )
+            for _ in 0..<800 {
+                if !model.operationActive { break }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            for _ in 0..<80 where window.attachedSheet != nil {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+            guard sampletoolsReplacementCompleted,
+                  model.externalSampleEditSession == nil,
+                  window.attachedSheet == nil,
+                  try Data(contentsOf: image)
+                    != imageBeforeSAMPLETOOLSReplace
+            else {
+                throw RegressionFailure(
+                    "Replacing with the returned SAMPLETOOLS output did not complete through the verified IMG workflow."
+                )
+            }
+            print("✓ Replaced the selected S9 with the returned SAMPLETOOLS output through verified IMG mutation")
 
             model.selection = [replacedEditedSample.id]
             model.showSelectedFileInformation()
@@ -2203,6 +2453,38 @@ struct InteractionRegressionRunner {
         try file.write(from: buffer)
     }
 
+    private static func replaceFirstPCMSample(
+        in data: inout Data,
+        with value: Int16
+    ) throws {
+        var offset = 12
+        while offset + 8 <= data.count {
+            let chunkID = String(
+                decoding: data[offset..<(offset + 4)],
+                as: UTF8.self
+            )
+            let chunkSize = Int(data[offset + 4])
+                | (Int(data[offset + 5]) << 8)
+                | (Int(data[offset + 6]) << 16)
+                | (Int(data[offset + 7]) << 24)
+            let payload = offset + 8
+            guard chunkSize >= 0, payload + chunkSize <= data.count else {
+                break
+            }
+            if chunkID == "data", chunkSize >= 2 {
+                let raw = UInt16(bitPattern: value)
+                data[payload] = UInt8(raw & 0xff)
+                data[payload + 1] = UInt8((raw >> 8) & 0xff)
+                return
+            }
+            offset = payload + chunkSize
+                + (chunkSize.isMultiple(of: 2) ? 0 : 1)
+        }
+        throw RegressionFailure(
+            "The sample-edit WAV did not contain 16-bit PCM data."
+        )
+    }
+
     private static func appendCueMarkers(
         _ sampleOffsets: [UInt32],
         to wavURL: URL
@@ -2270,7 +2552,7 @@ struct InteractionRegressionRunner {
             ofItemAtPath: executable.path
         )
         let propertyList: [String: Any] = [
-            "CFBundleIdentifier": "test.akai.interaction-audio-editor",
+            "CFBundleIdentifier": SAMPLETOOLSInterop.bundleIdentifier,
             "CFBundleName": "Test Audio Editor",
             "CFBundlePackageType": "APPL",
             "CFBundleExecutable": "Test Audio Editor"

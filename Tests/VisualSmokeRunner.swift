@@ -78,7 +78,13 @@ struct VisualSmokeRunner {
             let showsSampleKeyboard = ProcessInfo.processInfo.environment[
                 "EDIT950_SHOW_SAMPLE_KEYBOARD"
             ] == "1"
-            try await model.openImage(imageURL, readOnly: !showsSampleKeyboard)
+            let opensWritable = ProcessInfo.processInfo.environment[
+                "EDIT950_SMOKE_WRITABLE"
+            ] == "1"
+            try await model.openImage(
+                imageURL,
+                readOnly: !showsSampleKeyboard && !opensWritable
+            )
             if showsSampleKeyboard {
                 guard let sample = model.snapshot.files.first(where: \.isSample) else {
                     throw VisualSmokeFailure.sampleUnavailable
@@ -134,14 +140,16 @@ struct VisualSmokeRunner {
                         )
                     }
                 }
-                if ProcessInfo.processInfo.environment[
+                let showsDiskInspector = ProcessInfo.processInfo.environment[
                     "EDIT950_SMOKE_DISK_INSPECTOR"
-                ] != "1", let firstFile = model.snapshot.files.first {
+                ] == "1"
+                let showsFileInspector = ProcessInfo.processInfo.environment[
+                    "EDIT950_SMOKE_FILE_INSPECTOR"
+                ] == "1"
+                if !showsDiskInspector, let firstFile = model.snapshot.files.first {
                     model.selection = [firstFile.id]
                 }
-                if ProcessInfo.processInfo.environment[
-                    "EDIT950_SMOKE_DISK_INSPECTOR"
-                ] == "1" {
+                if showsDiskInspector || showsFileInspector {
                     let inspectorRoot = EditInspector()
                         .environmentObject(model)
                         .preferredColorScheme(suitePreferences.appearance.colorScheme)

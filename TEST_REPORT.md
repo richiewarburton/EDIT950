@@ -1,6 +1,6 @@
 # EDIT950 validation report
 
-Current source: **1.8.48 (build 69)**
+Current source: **1.8.49 (build 72)**
 Platform: macOS 14 or later, Apple silicon and Intel
 
 This report describes the public checks used for EDIT950. Private sampler
@@ -29,6 +29,9 @@ bounded on-screen diagnostic rendering. The P9 coverage includes direct
 multi-selection editing, Mixed values, absolute parameter-group paste,
 continuous-gesture Undo grouping, recovery journals, source-conflict detection,
 atomic staged IMG replacement and the versioned PLAY950 live-audition protocol.
+The cross-application coverage validates the branded SAMPLETOOLS launch target,
+unique round-trip identifier matching, WAV Launch Services declaration and
+validated replacement of only the active sample session's temporary WAV.
 It also verifies that bandwidth conversion scales loop endpoints to the
 converted WAV's measured frame count, keeps current audition playback alive
 until the new preview is ready, and exposes the Finder association controls for
@@ -66,11 +69,17 @@ The following broader checks are also available:
   handoff actions. It also creates and byte-verifies a renamed copy of an
   unchanged P9, then deliberately overwrites and verifies that unchanged P9
   without requiring a dummy edit.
+- The interaction check proves that sending to SAMPLETOOLS opens no EDIT950
+  sample sheet, then sends an identified simulated output back into the compact
+  original/returned comparison. It keeps unrelated imports out of that route,
+  retains the transfer file, verifies that Cancel leaves the IMG byte-exact,
+  and exercises a second return through backed-up, re-exported and verified S9
+  replacement.
 - The visual checks render the browser, including its persistent IMG-capacity
   header meter and enlarged fixed-region type, plus the sample editor, zoomed
   program editor, settings views and the loaded-IMG inspector for manual
   inspection in light and dark appearances. The inspector check includes the
-  **OPEN IN FIND** and **SEND TO PLAY** controls.
+  **OPEN IN FIND**, **SEND TO PLAY** and branded **EDIT IN SAMPLETOOLS** controls.
 - The release build verifies the application metadata, Universal
   `arm64`/`x86_64` architectures and deep ad-hoc signature.
 

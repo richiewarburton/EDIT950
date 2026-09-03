@@ -302,6 +302,7 @@ enum SuiteLauncherTarget: String {
     case edit = "EDIT950"
     case find = "FIND950"
     case play = "PLAY950"
+    case sampletools = "SAMPLETOOLS"
 }
 
 struct SuiteLauncherLabel: View {
@@ -361,7 +362,8 @@ enum SuiteFontGate {
             "Licenses/JetBrainsMono-OFL-1.1.txt",
             "BrandAssets/EDIT950-brand-mark.png",
             "BrandAssets/launcher-FIND950.png",
-            "BrandAssets/launcher-PLAY950.png"
+            "BrandAssets/launcher-PLAY950.png",
+            "BrandAssets/launcher-SAMPLETOOLS.png"
         ]
         precondition(required.allSatisfy { path in
             guard let root = Bundle.main.resourceURL else { return false }
@@ -463,15 +465,18 @@ struct SuiteMenuLabel: View {
     let title: String
     var systemImage: String? = nil
     var badge: Int? = nil
+    var fillsWidth = false
     var body: some View {
         HStack(spacing: 7) {
             if let systemImage { Image(systemName: systemImage) }
             Text(title.uppercased()).lineLimit(1)
             if let badge, badge > 0 { Text(badge.formatted()).font(SuiteFont.regular(11)).padding(.horizontal, 4).background(Color.suiteSlab3, in: RoundedRectangle(cornerRadius: 3)) }
+            if fillsWidth { Spacer(minLength: 0) }
             Image(systemName: "chevron.down").font(SuiteFont.regular(11)).frame(width: 22).padding(.vertical, 7).background(Color.suiteSlab2)
         }
         .font(SuiteFont.regular(12)).tracking(1.2).foregroundStyle(Color.suiteInk).padding(.leading, 10)
         .background(Color.suiteSlab).clipShape(RoundedRectangle(cornerRadius: 6))
+        .frame(maxWidth: fillsWidth ? .infinity : nil, alignment: .leading)
     }
 }
 

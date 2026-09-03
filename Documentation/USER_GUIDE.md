@@ -123,6 +123,15 @@ sample memory, re-exports the new S9 for byte comparison, and verifies that the
 original S9 and its P9 references are unchanged. Both actions offer a complete,
 verified IMG backup before writing.
 
+For varispeed, gain, mono mixing or root-key work, select an S9 and choose the
+branded **Edit in SAMPLETOOLS** action. SAMPLETOOLS opens by itself in
+**Return Mode**. Make the change, wait for **Output Ready**, then choose
+**Return to EDIT950**. Only then does EDIT950 open its compact comparison:
+audition the original and returned versions, then choose **Replace Sample**,
+**Save As New**, **Review Settings…** or **Cancel**. Review Settings opens the
+complete loop, root-note, compression and bandwidth editor. The IMG is not
+changed merely by sending, returning, auditioning or reviewing the WAV.
+
 ## Understand a program without becoming a technician
 
 Double-click a red P9 program to open the program editor.

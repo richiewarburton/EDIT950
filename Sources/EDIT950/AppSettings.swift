@@ -31,6 +31,52 @@ enum AkaiFileAssociation: String, CaseIterable, Hashable, Identifiable {
     }
 }
 
+enum SAMPLETOOLSInterop {
+    static let bundleIdentifier = "com.e45recordings.SAMPLETOOLS"
+    static let outputSuffix = "_OUTPUT"
+    static let roundTripDirectoryPrefix = "EDIT950-ROUNDTRIP-"
+
+    @MainActor
+    static func installedApplicationURL() -> URL? {
+        NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: bundleIdentifier
+        )
+    }
+
+    static func isSAMPLETOOLSApplication(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        return Bundle(url: url)?.bundleIdentifier == bundleIdentifier
+    }
+
+    static func roundTripDirectoryName(for identifier: UUID) -> String {
+        roundTripDirectoryPrefix + identifier.uuidString
+    }
+
+    static func roundTripIdentifier(in url: URL) -> UUID? {
+        let directoryName = url.deletingLastPathComponent().lastPathComponent
+        guard directoryName.hasPrefix(roundTripDirectoryPrefix) else {
+            return nil
+        }
+        return UUID(
+            uuidString: String(directoryName.dropFirst(roundTripDirectoryPrefix.count))
+        )
+    }
+
+    static func isExpectedReturn(
+        _ candidateURL: URL,
+        roundTripIdentifier: UUID
+    ) -> Bool {
+        guard candidateURL.pathExtension.caseInsensitiveCompare("wav")
+                == .orderedSame
+        else { return false }
+        let candidateBase = candidateURL.deletingPathExtension()
+            .lastPathComponent
+        return self.roundTripIdentifier(in: candidateURL)
+                == roundTripIdentifier
+            && candidateBase.uppercased().hasSuffix(outputSuffix)
+    }
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     static let fullDiskAccessSettingsURL = URL(

@@ -135,7 +135,7 @@ struct MainView: View {
             .environmentObject(preferences)
         }
         .sheet(item: $model.externalSampleEditSession) { editSession in
-            ExternalSampleEditSheet(editSession: editSession)
+            SampleEditPresentationSheet(editSession: editSession)
                 .environmentObject(model)
                 .environmentObject(settings)
         }
@@ -1819,16 +1819,98 @@ struct EditInspector: View {
 
     @ViewBuilder
     private func actions(_ file: AkaiFile) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if file.isSample {
-                Button(model.auditioningSampleID == file.id ? "STOP AUDITION" : "AUDITION") {
+                Button {
                     if model.auditioningSampleID == nil { model.auditionSelectedSample() } else { model.stopSampleAudition() }
-                }.buttonStyle(SuitePrimaryButtonStyle(role: .sample)).disabled(!model.canAuditionSelectedSample && model.auditioningSampleID == nil)
-                Button("EDIT SAMPLE…") { model.editSelectedSampleInAudioEditor() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canEditSelectedS9Sample)
-                Button("EXPORT AS WAV…") { model.exportSelected() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canExport)
-                Button("COPY ORIGINAL S9…") { model.copySelectedNativeFiles() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canCopyNativeFiles)
-                Button("RENAME S9…") { model.renameSelectedNativeFile() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canRenameSelectedNativeFile)
-                Button("REPAIR INTERNAL SAMPLE NAME") { model.fixSelectedRAMNames() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canMutate)
+                } label: {
+                    InspectorActionLabel(
+                        model.auditioningSampleID == file.id
+                            ? "STOP AUDITION" : "AUDITION"
+                    )
+                }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .sample))
+                .disabled(
+                    !model.canAuditionSelectedSample
+                        && model.auditioningSampleID == nil
+                )
+
+                if let pending = model.pendingSAMPLETOOLSRoundTrip {
+                    HStack(spacing: 8) {
+                        SuiteLauncherLabel(
+                            target: .sampletools,
+                            title: "EDITING IN SAMPLETOOLS"
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        Button("CANCEL") {
+                            model.cancelExternalSampleEdit(pending)
+                        }
+                        .buttonStyle(SuiteSecondaryButtonStyle())
+                        .accessibilityIdentifier(
+                            "cancel-sampletools-round-trip-button"
+                        )
+                    }
+                    .padding(8)
+                    .background(Color.suiteSlab)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text(
+                        "CHOOSE RETURN TO EDIT950 IN SAMPLETOOLS WHEN THE OUTPUT IS READY · IMG UNCHANGED"
+                    )
+                    .font(SuiteFont.regular(8))
+                    .tracking(0.6)
+                    .foregroundStyle(Color.suiteUnit)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Button {
+                        model.sendSelectedSampleToSAMPLETOOLS()
+                    } label: {
+                        SuiteLauncherLabel(
+                            target: .sampletools,
+                            title: "EDIT IN SAMPLETOOLS"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(SuitePrimaryButtonStyle(role: .neutral))
+                    .disabled(!model.canEditSelectedS9Sample)
+                    .accessibilityIdentifier(
+                        "send-sample-to-sampletools-button"
+                    )
+                    .help(
+                        "Open a private copy in SAMPLETOOLS. Return its output to compare, replace, save as new, or review settings."
+                    )
+                }
+
+                LazyVGrid(
+                    columns: inspectorActionColumns,
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    Button { model.editSelectedSampleInAudioEditor() } label: {
+                        InspectorActionLabel("EDIT SAMPLE…")
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .disabled(!model.canEditSelectedS9Sample)
+                    Button { model.exportSelected() } label: {
+                        InspectorActionLabel("EXPORT AS WAV…")
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .disabled(!model.canExport)
+                    Button { model.copySelectedNativeFiles() } label: {
+                        InspectorActionLabel("COPY ORIGINAL S9…")
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .disabled(!model.canCopyNativeFiles)
+                    Button { model.renameSelectedNativeFile() } label: {
+                        InspectorActionLabel("RENAME S9…")
+                    }
+                    .buttonStyle(SuiteSecondaryButtonStyle())
+                    .disabled(!model.canRenameSelectedNativeFile)
+                }
+                Button { model.fixSelectedRAMNames() } label: {
+                    InspectorActionLabel("REPAIR INTERNAL SAMPLE NAME")
+                }
+                .buttonStyle(SuiteSecondaryButtonStyle())
+                .disabled(!model.canMutate)
             } else if (file.name as NSString).pathExtension.uppercased() == "P9" {
                 Button { model.openSelectedProgramInPLAY950() } label: {
                     SuiteLauncherLabel(target: .play, title: "OPEN IN PLAY950")
@@ -1841,12 +1923,40 @@ struct EditInspector: View {
             } else {
                 Button("COPY ORIGINAL FILE…") { model.copySelectedNativeFiles() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canCopyNativeFiles)
             }
-            Menu { FileTagMenuContent(files: [file]) } label: { SuiteMenuLabel(title: "TAGS", systemImage: "tag") }.menuStyle(.borderlessButton)
-            Button("FILE INFORMATION…") { model.showSelectedFileInformation() }.buttonStyle(SuiteSecondaryButtonStyle()).disabled(!model.canShowSelectedFileInformation)
+            LazyVGrid(
+                columns: inspectorActionColumns,
+                alignment: .leading,
+                spacing: 8
+            ) {
+                Menu { FileTagMenuContent(files: [file]) } label: {
+                    SuiteMenuLabel(
+                        title: "TAGS",
+                        systemImage: "tag",
+                        fillsWidth: true
+                    )
+                }
+                .frame(maxWidth: .infinity)
+                .menuStyle(.borderlessButton)
+                Button { model.showSelectedFileInformation() } label: {
+                    InspectorActionLabel("FILE INFORMATION…")
+                }
+                .buttonStyle(SuiteSecondaryButtonStyle())
+                .disabled(!model.canShowSelectedFileInformation)
+            }
             if model.canMutate {
-                Button("DELETE…") { model.requestDeleteSelected() }.buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
+                Button { model.requestDeleteSelected() } label: {
+                    InspectorActionLabel("DELETE…")
+                }
+                .buttonStyle(SuitePrimaryButtonStyle(role: .destructive))
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var inspectorActionColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 8),
+            GridItem(.flexible(), spacing: 8)
+        ]
     }
 
     private var multiInspector: some View {
@@ -1916,6 +2026,21 @@ struct EditInspector: View {
     }
     private func metadata(_ title: String, _ value: String) -> some View {
         HStack { Text(title).font(SuiteFont.regular(12)).tracking(1.2).foregroundStyle(Color.suiteLabel); Spacer(); Text(value).font(SuiteFont.medium(13)).monospacedDigit() }
+    }
+}
+
+private struct InspectorActionLabel: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .lineLimit(1)
+            .minimumScaleFactor(0.68)
+            .frame(maxWidth: .infinity)
     }
 }
 

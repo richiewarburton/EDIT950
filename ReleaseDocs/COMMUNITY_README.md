@@ -1,4 +1,4 @@
-# EDIT950 1.8.48
+# EDIT950 1.8.49
 
 EDIT950 is an independent native macOS application for browsing and managing AKAI S950 disk-image files through a Finder-style interface.
 
@@ -9,6 +9,12 @@ process. Its complete corresponding GPL-2.0-or-later source is included in the
 release archive. Removable-media metadata cleanup and safe eject are built in.
 
 The sampler-critical workflow through build 20 has been confirmed on physical S950 hardware. Edited and ADG-imported programs, chromatic Spread, keygroup deletion, copied-keygroup program creation, verified in-IMG P9 overwrite and the external-editor S9 audio round trip all survived sampler loading.
+
+Version 1.8.49 build 72 adds a direct, branded SAMPLETOOLS action for selected
+S9 samples. EDIT950 waits silently while SAMPLETOOLS works, then presents its
+returned output in a compact original/returned comparison before any IMG write,
+with A/B audition and explicit verified Replace or Save As New. The inspector actions
+are aligned into a clearer compact hierarchy.
 
 Version 1.8.48 build 69 replaces the unreliable bulk-operation workflow with
 direct multi-keygroup editing. Mixed values are explicit, exact values apply
